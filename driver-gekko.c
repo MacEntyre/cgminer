@@ -1,5 +1,6 @@
 /*
- * Copyright 2021-2026 kano
+* Copyright 2025-2026 MacEntyre
+* Copyright 2021-2026 kano
  * Copyright 2021-2024 sidehack
  * Copyright 2017-2021 vh
  *
