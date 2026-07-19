@@ -1,5 +1,7 @@
 nbproject
 .dirstamp
+.idea/
+build/
 .libs/
 jansson.pc
 compat/jansson-2.9/src/jansson_config.h
@@ -16,6 +18,9 @@ SI/*
 
 cgminer
 cgminer.exe
+apibridged
+apibridged.exe
+apibridge.token
 minerd
 minerd.exe
 *.o

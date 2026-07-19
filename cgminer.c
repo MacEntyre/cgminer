@@ -70,6 +70,9 @@ char *curly = ":D";
 #ifdef USE_USBUTILS
 #include "usbutils.h"
 #endif
+#ifdef USE_APIBRIDGE
+#include "cgminer-apibridge.h"
+#endif
 
 #if defined(unix) || defined(__APPLE__)
 	#include <errno.h>
@@ -254,6 +257,12 @@ char *opt_api_mcast_code = API_MCAST_CODE;
 char *opt_api_mcast_des = "";
 int opt_api_mcast_port = 4028;
 bool opt_api_network;
+#ifdef USE_APIBRIDGE
+bool opt_api_bridge;
+int opt_api_bridge_port = 4029;
+char *opt_api_bridge_bind = NULL;
+char *opt_api_bridge_token_file = NULL;
+#endif
 bool opt_delaynet;
 bool opt_disable_pool;
 static bool no_work;
@@ -433,6 +442,11 @@ static pthread_t usb_poll_thread;
 static bool usb_polling;
 static bool polling_usb;
 static bool usb_reinit;
+#endif
+
+#ifdef USE_APIBRIDGE
+cgsem_t api_ready_sem;
+bool cgminer_api_listening;
 #endif
 
 char *opt_kernel_path;
@@ -1440,6 +1454,20 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITH_ARG("--api-host",
 		     opt_set_charp, NULL, &opt_api_host,
 		     "Specify API listen address, default: 0.0.0.0"),
+#ifdef USE_APIBRIDGE
+	OPT_WITHOUT_ARG("--api-bridge",
+			opt_set_bool, &opt_api_bridge,
+			"Enable the apibridge companion HTTP/WebSocket API process, default: disabled"),
+	OPT_WITH_ARG("--api-bridge-port",
+		     set_int_1_to_65535, opt_show_intval, &opt_api_bridge_port,
+		     "Port number for the apibridge HTTP/WebSocket listener, default: 4029"),
+	OPT_WITH_ARG("--api-bridge-bind",
+		     opt_set_charp, NULL, &opt_api_bridge_bind,
+		     "Bind address for the apibridge listener, default: 0.0.0.0 (LAN-reachable, no TLS yet - trusted LAN only)"),
+	OPT_WITH_ARG("--api-bridge-token-file",
+		     opt_set_charp, NULL, &opt_api_bridge_token_file,
+		     "Path to write the generated apibridge bearer token, default: <cgminer_path>/apibridge.token"),
+#endif
 #ifdef USE_ICARUS
 	OPT_WITH_ARG("--au3-freq",
 		     set_float_100_to_250, &opt_show_floatval, &opt_au3_freq,
@@ -4921,6 +4949,10 @@ void app_restart(void)
 
 	cg_completion_timeout(&__kill_work, NULL, 5000);
 	clean_up(true);
+
+#ifdef USE_APIBRIDGE
+	stop_apibridge();
+#endif
 
 #if defined(unix) || defined(__APPLE__)
 	if (forkpid > 0) {
@@ -9846,6 +9878,10 @@ void __quit(int status, bool clean)
 		disable_curses();
 #endif
 
+#ifdef USE_APIBRIDGE
+	stop_apibridge();
+#endif
+
 #if defined(unix) || defined(__APPLE__)
 	if (forkpid > 0) {
 		kill(forkpid, SIGTERM);
@@ -10910,6 +10946,11 @@ ASSERTbc(sizeof(test_work.hash) == (BC_MAX_BITS / HEX_BYTE));
 
 	gwsched_thr_id = 0;
 
+#ifdef USE_APIBRIDGE
+	cgsem_init(&api_ready_sem);
+	cgminer_api_listening = false;
+#endif
+
 #ifdef USE_USBUTILS
 	usb_initialise();
 
@@ -11139,6 +11180,10 @@ begin_bench:
 	thr = &control_thr[api_thr_id];
 	if (thr_info_create(thr, NULL, api_thread, thr))
 		early_quit(1, "API thread create failed");
+
+#ifdef USE_APIBRIDGE
+	start_apibridge();
+#endif
 
 #ifdef USE_USBUTILS
 	hotplug_thr_id = 6;

@@ -20,6 +20,9 @@
 #include <unistd.h>
 #include <limits.h>
 #include <sys/types.h>
+#ifndef WIN32
+#include <fcntl.h>
+#endif
 
 #include "compat.h"
 #include "miner.h"
@@ -4940,6 +4943,10 @@ void api(int api_thr_id)
 
 	if (!opt_api_listen) {
 		applog(LOG_DEBUG, "API not running%s", UNAVAILABLE);
+#ifdef USE_APIBRIDGE
+		cgminer_api_listening = false;
+		cgsem_post(&api_ready_sem);
+#endif
 		free(apisock);
 		return;
 	}
@@ -4958,6 +4965,10 @@ void api(int api_thr_id)
 
 		if (ips == 0) {
 			applog(LOG_WARNING, "API not running (no valid IPs specified)%s", UNAVAILABLE);
+#ifdef USE_APIBRIDGE
+			cgminer_api_listening = false;
+			cgsem_post(&api_ready_sem);
+#endif
 			free(apisock);
 			return;
 		}
@@ -4973,6 +4984,10 @@ void api(int api_thr_id)
 	hints.ai_family = AF_UNSPEC;
 	if (getaddrinfo(opt_api_host, port_s, &hints, &res) != 0) {
 		applog(LOG_ERR, "API failed to resolve %s", opt_api_host);
+#ifdef USE_APIBRIDGE
+		cgminer_api_listening = false;
+		cgsem_post(&api_ready_sem);
+#endif
 		free(apisock);
 		return;
 	}
@@ -4985,10 +5000,21 @@ void api(int api_thr_id)
 	}
 	if (*apisock == INVSOCK) {
 		applog(LOG_ERR, "API initialisation failed (%s)%s", SOCKERRMSG, UNAVAILABLE);
+#ifdef USE_APIBRIDGE
+		cgminer_api_listening = false;
+		cgsem_post(&api_ready_sem);
+#endif
 		freeaddrinfo(res);
 		free(apisock);
 		return;
 	}
+
+#ifndef WIN32
+	// Never let a forked child (--monitor, apibridge, ...) inherit the
+	// listening socket across exec - otherwise it keeps the port bound
+	// (without ever accept()ing on it) even after cgminer itself exits.
+	fcntl(*apisock, F_SETFD, FD_CLOEXEC);
+#endif
 
 #ifndef WIN32
 	// On linux with SO_REUSEADDR, bind will get the port if the previous
@@ -5023,12 +5049,20 @@ void api(int api_thr_id)
 
 	if (bound == 0) {
 		applog(LOG_ERR, "API bind to port %d failed (%s)%s", port, binderror, UNAVAILABLE);
+#ifdef USE_APIBRIDGE
+		cgminer_api_listening = false;
+		cgsem_post(&api_ready_sem);
+#endif
 		free(apisock);
 		return;
 	}
 
 	if (SOCKETFAIL(listen(*apisock, QUEUE))) {
 		applog(LOG_ERR, "API3 initialisation failed (%s)%s", SOCKERRMSG, UNAVAILABLE);
+#ifdef USE_APIBRIDGE
+		cgminer_api_listening = false;
+		cgsem_post(&api_ready_sem);
+#endif
 		CLOSESOCKET(*apisock);
 		free(apisock);
 		return;
@@ -5042,6 +5076,11 @@ void api(int api_thr_id)
 		else
 			applog(LOG_WARNING, "API running in local read access mode on port %d (%d)", port, (int)*apisock);
 	}
+
+#ifdef USE_APIBRIDGE
+	cgminer_api_listening = true;
+	cgsem_post(&api_ready_sem);
+#endif
 
 	if (opt_api_mcast)
 		mcast_init();
