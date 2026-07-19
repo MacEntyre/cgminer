@@ -11,6 +11,31 @@ on:
       - edition-macentyre
 
 jobs:
+  lint:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install lint tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cppcheck shellcheck
+          pip install --quiet ruff
+
+      - name: cppcheck - apibridge
+        run: |
+          cppcheck --error-exitcode=1 --enable=warning,performance,portability \
+            --inline-suppr --suppress=missingInclude \
+            -Iapibridge -I. -Ilib -Iccan \
+            -Icompat/jansson-2.9/src -Icompat/civetweb-1.16 \
+            apibridge/*.c cgminer-apibridge.c
+
+      - name: ruff - apibridge tools
+        run: ruff check apibridge/tools/*.py
+
+      - name: shellcheck - apibridge tools
+        run: shellcheck apibridge/tools/hw-smoke-test.sh
+
   build:
     runs-on: ubuntu-22.04
     strategy:
@@ -42,6 +67,9 @@ jobs:
       - name: make
         run: make -j$(nproc)
 
+      - name: unit tests
+        run: make check
+
       - name: smoke test - cgminer binary
         run: |
           ./cgminer --help >/dev/null
@@ -56,6 +84,10 @@ jobs:
           # cgminer to talk to. The leading "!" is required so this
           # expected-nonzero exit doesn't trip "set -e" itself.
           ! timeout 5 ./apibridged
+
+      - name: component test - apibridged against a fake cgminer
+        if: contains(matrix.configure_flags, '--enable-apibridge')
+        run: apibridge/tools/component-test.py
 
       - name: upload binaries
         uses: actions/upload-artifact@v4

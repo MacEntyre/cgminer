@@ -92,13 +92,32 @@ If cgminer becomes unreachable, the last-known-good data keeps being
 served with "stale":true rather than an error, so a dashboard has
 something to show instead of a blank screen.
 
+AUTOMATED TESTS
+
+CI (see .github/workflows/build.yml) runs three layers, none of which need
+real hardware:
+
+  - lint job: cppcheck over apibridge/*.c and cgminer-apibridge.c, ruff
+    over apibridge/tools/*.py, shellcheck over hw-smoke-test.sh.
+  - unit tests: apibridge/tests/test_auth.c and test_settings.c, plain
+    assert-based C binaries (no framework) exercising the pure logic in
+    auth.c and settings.c. Run locally with `make check` after
+    `./configure --enable-apibridge`.
+  - component test: apibridge/tools/component-test.py starts apibridged
+    against a fake, stdlib-only stand-in for cgminer's RPC API and drives
+    /health, /summary, /devs, /pools (with and without the bearer token,
+    including the ?token= fallback) plus a clean SIGTERM shutdown. Run
+    locally with `apibridge/tools/component-test.py` once cgminer and
+    apibridged are built.
+
 TESTING AGAINST REAL HARDWARE
 
-The CI build (see .github/workflows/build.yml) only smoke-tests that
-apibridged starts and fails fast without a running cgminer - GitHub-hosted
-runners have no USB access to actual miners. To exercise the full stack
-(device detection, REST endpoints, the WebSocket stream, and clean
-shutdown) against a physically attached GekkoScience device, run:
+The component test above covers the HTTP/auth/statscache stack against a
+fake cgminer; it still can't exercise real device detection or the
+WebSocket stream, since GitHub-hosted runners have no USB access to actual
+miners. To exercise the full stack (device detection, REST endpoints, the
+WebSocket stream, and clean shutdown) against a physically attached
+GekkoScience device, run:
 
     apibridge/tools/hw-smoke-test.sh <gekko-detect-flag> [pool] [user] [pass]
 
