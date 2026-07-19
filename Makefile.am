@@ -22,6 +22,7 @@ EXTRA_DIST	= example.conf linux-usb-cgminer \
 		  bitforce-firmware-flash.c hexdump.c ASIC-README \
 		  APIBRIDGE-README \
 		  apibridge/tools/hw-smoke-test.sh apibridge/tools/ws_probe.py \
+		  apibridge/tools/apibridge-cli.py apibridge/tools/_ws.py \
 		  01-cgminer.rules
 
 SUBDIRS		= lib compat ccan

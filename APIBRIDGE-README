@@ -114,6 +114,27 @@ token), reads a few live frames off /stream via a small stdlib-only
 WebSocket client (apibridge/tools/ws_probe.py), and verifies cgminer can
 shut down apibridged cleanly within its SIGTERM grace period.
 
+CLI CLIENT
+
+For manual poking around - not a scripted test, just a convenient way to
+query a running apibridge instance from a terminal - use
+apibridge/tools/apibridge-cli.py. Stdlib only, no dependencies.
+
+    apibridge/tools/apibridge-cli.py health
+    apibridge/tools/apibridge-cli.py summary
+    apibridge/tools/apibridge-cli.py devs
+    apibridge/tools/apibridge-cli.py pools
+    apibridge/tools/apibridge-cli.py stream          # follow /stream until Ctrl+C
+    apibridge/tools/apibridge-cli.py stream -n 5      # 5 frames then exit
+
+Each command prints a condensed human-readable view by default, or the
+raw JSON response with --json. Connection options (--host, --port) default
+to 127.0.0.1:4029. The bearer token is read from --token, --token-file
+(default: ./apibridge.token, the same relative path cgminer writes it to
+when run from the repo root), or the APIBRIDGE_TOKEN environment
+variable, in that order; /health needs no token. Run with --help for the
+full option list.
+
 SECURITY NOTE
 
 Phase 1 has no TLS and binds to 0.0.0.0 by default (LAN-reachable) since
