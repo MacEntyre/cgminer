@@ -1,0 +1,56 @@
+name: build
+
+on:
+  push:
+    branches:
+      - master
+      - edition-macentyre
+  pull_request:
+    branches:
+      - edition-macentyre
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gekko
+            configure_flags: --enable-gekko
+          - name: gekko+apibridge
+            configure_flags: --enable-gekko --enable-apibridge
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential autoconf automake libtool pkg-config \
+            libcurl4-openssl-dev libudev-dev libusb-1.0-0-dev \
+            libncurses5-dev zlib1g-dev
+
+      - name: autogen
+        run: ./autogen.sh
+
+      - name: configure
+        run: CFLAGS="-O2 -Wall -fcommon" ./configure ${{ matrix.configure_flags }}
+
+      - name: make
+        run: make -j$(nproc)
+
+      - name: smoke test - cgminer binary
+        run: |
+          ./cgminer --help >/dev/null
+          ./cgminer --version
+
+      - name: smoke test - apibridged binary
+        if: contains(matrix.configure_flags, '--enable-apibridge')
+        run: |
+          test -x ./apibridged
+          # apibridged requires CGMINER_APIBRIDGE_TOKEN; confirm it fails
+          # fast with a clear error rather than hanging, without a real
+          # cgminer to talk to.
+          timeout 5 ./apibridged; test $? -eq 1
