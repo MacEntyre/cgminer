@@ -12,7 +12,8 @@ Connection options:
     --host HOST         apibridge host (default: 127.0.0.1)
     --port PORT          apibridge port (default: 4029)
     --token TOKEN         Bearer token (overrides --token-file/env)
-    --token-file PATH      Read token from this file (default: ./apibridge.token)
+    --token-file PATH      Read token from this file (default: looks for
+                          ./apibridge.token, then <repo-root>/apibridge.token)
 
     Token is also read from the APIBRIDGE_TOKEN environment variable if
     neither --token nor --token-file finds one. /health needs no token.
@@ -41,17 +42,42 @@ import urllib.request
 
 from _ws import connect, read_frame
 
+# apibridge.token is written next to the cgminer binary, which is normally
+# the repo root - not necessarily the caller's cwd, and not the directory
+# this script lives in (apibridge/tools/). Try both so `summary` etc. work
+# regardless of where you invoke this from.
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT_TOKEN = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "apibridge.token"))
+
 
 def resolve_token(args):
     if args.token:
-        return args.token
-    token_file = args.token_file or "apibridge.token"
-    try:
-        with open(token_file) as f:
-            return f.read().strip()
-    except OSError:
-        pass
-    return os.environ.get("APIBRIDGE_TOKEN")
+        return args.token, None
+
+    candidates = [args.token_file] if args.token_file else ["apibridge.token", REPO_ROOT_TOKEN]
+    for path in candidates:
+        try:
+            with open(path) as f:
+                return f.read().strip(), None
+        except OSError:
+            continue
+
+    env_token = os.environ.get("APIBRIDGE_TOKEN")
+    if env_token:
+        return env_token, None
+
+    return None, candidates
+
+
+def require_token(args):
+    token, searched = resolve_token(args)
+    if token:
+        return token
+    print("error: no token found (need one for this endpoint)", file=sys.stderr)
+    if searched:
+        print(f"  tried: {', '.join(searched)}", file=sys.stderr)
+    print("  pass --token TOKEN, --token-file PATH, or set APIBRIDGE_TOKEN", file=sys.stderr)
+    sys.exit(1)
 
 
 def http_get(url, token=None, timeout=10):
@@ -102,7 +128,7 @@ def cmd_health(args):
 
 def cmd_summary(args):
     url = f"http://{args.host}:{args.port}/api/v1/summary"
-    status, data = http_get(url, resolve_token(args))
+    status, data = http_get(url, require_token(args))
     require_ok(status, data, url)
     if args.json:
         print(json.dumps(data, indent=2))
@@ -117,7 +143,7 @@ def cmd_summary(args):
 
 def cmd_devs(args):
     url = f"http://{args.host}:{args.port}/api/v1/devs"
-    status, data = http_get(url, resolve_token(args))
+    status, data = http_get(url, require_token(args))
     require_ok(status, data, url)
     if args.json:
         print(json.dumps(data, indent=2))
@@ -133,7 +159,7 @@ def cmd_devs(args):
 
 def cmd_pools(args):
     url = f"http://{args.host}:{args.port}/api/v1/pools"
-    status, data = http_get(url, resolve_token(args))
+    status, data = http_get(url, require_token(args))
     require_ok(status, data, url)
     if args.json:
         print(json.dumps(data, indent=2))
@@ -147,10 +173,7 @@ def cmd_pools(args):
 
 
 def cmd_stream(args):
-    token = resolve_token(args)
-    if not token:
-        print("error: /stream requires a token (--token/--token-file/APIBRIDGE_TOKEN)", file=sys.stderr)
-        sys.exit(1)
+    token = require_token(args)
     try:
         sock, buf = connect(args.host, args.port, "/api/v1/stream", token)
     except (OSError, RuntimeError) as e:
