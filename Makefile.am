@@ -20,6 +20,10 @@ EXTRA_DIST	= example.conf linux-usb-cgminer \
 		  API.class API.java api-example.c windows-build.txt \
 		  mac-build.txt bitstreams/README API-README FPGA-README \
 		  bitforce-firmware-flash.c hexdump.c ASIC-README \
+		  APIBRIDGE-README \
+		  apibridge/tools/hw-smoke-test.sh apibridge/tools/ws_probe.py \
+		  apibridge/tools/apibridge-cli.py apibridge/tools/_ws.py \
+		  apibridge/tools/component-test.py \
 		  01-cgminer.rules
 
 SUBDIRS		= lib compat ccan
@@ -222,4 +226,42 @@ endif
 
 if HAS_GEKKO
 cgminer_SOURCES += driver-gekko.c driver-gekko.h
+endif
+
+if HAS_APIBRIDGE
+cgminer_SOURCES += cgminer-apibridge.c cgminer-apibridge.h
+
+bin_PROGRAMS += apibridged
+
+CIVETWEB_CPPFLAGS = -I$(top_srcdir)/compat/civetweb-1.16 -DNO_SSL -DUSE_WEBSOCKET -DNO_CGI -DUSE_IPV6
+
+apibridged_SOURCES = apibridge/main.c \
+		     apibridge/cgclient.c apibridge/cgclient.h \
+		     apibridge/statscache.c apibridge/statscache.h \
+		     apibridge/httpapi.c apibridge/httpapi.h \
+		     apibridge/wsapi.c apibridge/wsapi.h \
+		     apibridge/auth.c apibridge/auth.h \
+		     apibridge/settings.c apibridge/settings.h \
+		     apibridge/apibridge.h \
+		     compat/civetweb-1.16/civetweb.c compat/civetweb-1.16/civetweb.h
+apibridged_CPPFLAGS = $(PTHREAD_FLAGS) $(JANSSON_CPPFLAGS) $(CIVETWEB_CPPFLAGS)
+apibridged_LDFLAGS  = $(PTHREAD_FLAGS)
+apibridged_LDADD    = @JANSSON_LIBS@ @PTHREAD_LIBS@
+
+check_PROGRAMS = apibridge_test_auth apibridge_test_settings
+TESTS = $(check_PROGRAMS)
+
+apibridge_test_auth_SOURCES = apibridge/tests/test_auth.c apibridge/tests/test_util.h \
+			     apibridge/auth.c apibridge/auth.h \
+			     apibridge/apibridge.h \
+			     compat/civetweb-1.16/civetweb.c compat/civetweb-1.16/civetweb.h
+apibridge_test_auth_CPPFLAGS = $(PTHREAD_FLAGS) $(JANSSON_CPPFLAGS) $(CIVETWEB_CPPFLAGS) \
+			     -I$(top_srcdir)/apibridge -I$(top_srcdir)/apibridge/tests
+apibridge_test_auth_LDFLAGS  = $(PTHREAD_FLAGS)
+apibridge_test_auth_LDADD    = @JANSSON_LIBS@ @PTHREAD_LIBS@
+
+apibridge_test_settings_SOURCES = apibridge/tests/test_settings.c apibridge/tests/test_util.h \
+				 apibridge/settings.c apibridge/settings.h \
+				 apibridge/apibridge.h
+apibridge_test_settings_CPPFLAGS = -I$(top_srcdir)/apibridge -I$(top_srcdir)/apibridge/tests
 endif

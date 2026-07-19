@@ -584,6 +584,17 @@ if test "x$forcecombo" = xyes; then
 	standalone="no"
 fi
 
+apibridge="no"
+
+AC_ARG_ENABLE([apibridge],
+	[AC_HELP_STRING([--enable-apibridge],[Compile support for the apibridge companion process (default disabled)])],
+	[apibridge=$enableval]
+	)
+if test "x$apibridge" = xyes; then
+	AC_DEFINE([USE_APIBRIDGE], [1], [Defined to 1 if apibridge support is wanted])
+fi
+AM_CONDITIONAL([HAS_APIBRIDGE], [test x$apibridge = xyes])
+
 curses="auto"
 
 AC_ARG_WITH([curses],

@@ -1,0 +1,173 @@
+This README describes apibridge, a companion process that exposes cgminer's
+existing RPC API (see API-README) as a modern HTTP/WebSocket JSON API,
+intended for a future mobile (iOS/Android) dashboard.
+
+WHY A SEPARATE PROCESS
+
+cgminer's own RPC API is a plain-text/JSON protocol over a raw TCP socket:
+one request per connection, no TLS, no WebSocket push (see API-README for
+the full protocol). That is not something a mobile app's networking stack
+wants to talk to directly (App Transport Security on iOS, background
+networking on Android, no push without polling).
+
+Rather than embed an HTTP/TLS/WebSocket library inside the cgminer process
+itself, apibridge is built as a second, separate binary. cgminer fork/execs
+it at startup and supervises it: if it crashes, cgminer respawns it with
+backoff; on shutdown or restart, cgminer terminates it cleanly. apibridge's
+only connection to cgminer is the existing RPC API on 127.0.0.1 - a bug or
+crash in apibridge can never take mining down with it, and a bug in mining
+code is never exposed to whatever talks to apibridge.
+
+From an operator's point of view there is still only one thing to run:
+cgminer starts and stops apibridge on its own.
+
+BUILDING
+
+apibridge is fully opt-in and not built by default. Add --enable-apibridge
+to configure, alongside whatever driver flags you already use, e.g.:
+
+    ./configure --enable-gekko --enable-apibridge
+
+This builds a second binary, "apibridged", installed alongside cgminer.
+Building without --enable-apibridge produces a cgminer binary with no
+apibridge code compiled in at all (no new symbols, no new binary).
+
+civetweb (the embedded HTTP/WebSocket library apibridge uses) is vendored
+under compat/civetweb-<version>/ - no external dependency to install.
+
+RUNNING
+
+apibridge is also opt-in at runtime. Pass --api-bridge to cgminer:
+
+    ./cgminer --api-listen --api-bridge -o stratum+tcp://pool:port -u user -p pass
+
+If --api-listen was not also given, cgminer enables it automatically (with
+a warning) since apibridge depends on it.
+
+Relevant flags:
+
+  --api-bridge                Enable the apibridge companion process,
+                               default: disabled
+  --api-bridge-port <n>       Port for the HTTP/WebSocket listener,
+                               default: 4029
+  --api-bridge-bind <addr>    Bind address, default: 0.0.0.0 (LAN-reachable)
+  --api-bridge-token-file <path>
+                               Where to write the generated auth token,
+                               default: <install dir>/apibridge.token
+
+On every cgminer start, a random bearer token is generated and written
+(mode 0600) to the token file. Read it to authenticate:
+
+    curl -H "Authorization: Bearer $(cat apibridge.token)" \
+         http://<host>:4029/api/v1/summary
+
+The token is not logged and is passed to the apibridge child process via
+an environment variable, not argv, to avoid exposure through `ps`. It
+rotates on every cgminer restart - there is no persistent pairing yet (see
+ROADMAP below).
+
+PHASE 1: READ-ONLY MONITORING
+
+This first phase is deliberately read-only. There is no way to change
+frequency, voltage, or any other miner setting through apibridge yet -
+only cgminer's own RPC API (ascset, see API-README) can do that.
+
+  GET /api/v1/summary   Same data as the RPC "summary" command
+  GET /api/v1/devs      Same data as the RPC "devs" command
+  GET /api/v1/pools     Same data as the RPC "pools" command
+  GET /api/v1/health    Bridge + cgminer reachability status, no auth
+                        required (used for connection-status UI)
+  GET /api/v1/stream    WebSocket upgrade; pushes a combined
+                        {"type":"stats","summary":...,"devs":...,
+                        "pools":...,"stale":...,"ts":...} envelope
+                        immediately on connect and once per poll cycle
+                        (default every 2s)
+
+All routes except /health require the bearer token, either as
+"Authorization: Bearer <token>" or, for the WebSocket route (some mobile
+WebSocket clients cannot set custom headers on the upgrade handshake), as
+a "?token=<token>" query parameter.
+
+If cgminer becomes unreachable, the last-known-good data keeps being
+served with "stale":true rather than an error, so a dashboard has
+something to show instead of a blank screen.
+
+AUTOMATED TESTS
+
+CI (see .github/workflows/build.yml) runs three layers, none of which need
+real hardware:
+
+  - lint job: cppcheck over apibridge/*.c and cgminer-apibridge.c, ruff
+    over apibridge/tools/*.py, shellcheck over hw-smoke-test.sh.
+  - unit tests: apibridge/tests/test_auth.c and test_settings.c, plain
+    assert-based C binaries (no framework) exercising the pure logic in
+    auth.c and settings.c. Run locally with `make check` after
+    `./configure --enable-apibridge`.
+  - component test: apibridge/tools/component-test.py starts apibridged
+    against a fake, stdlib-only stand-in for cgminer's RPC API and drives
+    /health, /summary, /devs, /pools (with and without the bearer token,
+    including the ?token= fallback) plus a clean SIGTERM shutdown. Run
+    locally with `apibridge/tools/component-test.py` once cgminer and
+    apibridged are built.
+
+TESTING AGAINST REAL HARDWARE
+
+The component test above covers the HTTP/auth/statscache stack against a
+fake cgminer; it still can't exercise real device detection or the
+WebSocket stream, since GitHub-hosted runners have no USB access to actual
+miners. To exercise the full stack (device detection, REST endpoints, the
+WebSocket stream, and clean shutdown) against a physically attached
+GekkoScience device, run:
+
+    apibridge/tools/hw-smoke-test.sh <gekko-detect-flag> [pool] [user] [pass]
+
+e.g. for a Compac A1:
+
+    apibridge/tools/hw-smoke-test.sh --gekko-compaca1-detect \
+        stratum+tcp://stratum.braiins.com:3333 MyWorker.test x
+
+This is a manual, opt-in script (not run by CI) that starts cgminer
+against the given pool with the given device, waits for apibridge to come
+up, checks /health, /summary, /devs, /pools (with and without the bearer
+token), reads a few live frames off /stream via a small stdlib-only
+WebSocket client (apibridge/tools/ws_probe.py), and verifies cgminer can
+shut down apibridged cleanly within its SIGTERM grace period.
+
+CLI CLIENT
+
+For manual poking around - not a scripted test, just a convenient way to
+query a running apibridge instance from a terminal - use
+apibridge/tools/apibridge-cli.py. Stdlib only, no dependencies.
+
+    apibridge/tools/apibridge-cli.py health
+    apibridge/tools/apibridge-cli.py summary
+    apibridge/tools/apibridge-cli.py devs
+    apibridge/tools/apibridge-cli.py pools
+    apibridge/tools/apibridge-cli.py stream          # follow /stream until Ctrl+C
+    apibridge/tools/apibridge-cli.py stream -n 5      # 5 frames then exit
+
+Each command prints a condensed human-readable view by default, or the
+raw JSON response with --json. Connection options (--host, --port) default
+to 127.0.0.1:4029. The bearer token is read from --token, --token-file
+(default: ./apibridge.token, the same relative path cgminer writes it to
+when run from the repo root), or the APIBRIDGE_TOKEN environment
+variable, in that order; /health needs no token. Run with --help for the
+full option list.
+
+SECURITY NOTE
+
+Phase 1 has no TLS and binds to 0.0.0.0 by default (LAN-reachable) since
+the whole point is a phone on the same network reaching it. Only run this
+on a trusted home/lab LAN. Use --api-bridge-bind 127.0.0.1 if you want to
+pair it with your own reverse proxy or VPN instead of exposing it directly.
+
+ROADMAP
+
+Phase 2 (planned): control endpoints (frequency, core voltage, etc.),
+relaying to cgminer's existing ascset validation rather than re-validating
+in apibridge, with a separate write-scoped token and a per-command audit
+log.
+
+Phase 3 (planned): mDNS/Bonjour discovery for the mobile app, TLS, and a
+real per-device pairing flow to replace the current shared-token-file
+model.

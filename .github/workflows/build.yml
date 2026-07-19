@@ -1,0 +1,99 @@
+name: build
+
+on:
+  push:
+    branches:
+      - master
+      - edition-macentyre
+      - "feature/**"
+  pull_request:
+    branches:
+      - edition-macentyre
+
+jobs:
+  lint:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install lint tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cppcheck shellcheck
+          pip install --quiet ruff
+
+      - name: cppcheck - apibridge
+        run: |
+          cppcheck --error-exitcode=1 --enable=warning,performance,portability \
+            --inline-suppr --suppress=missingInclude \
+            -Iapibridge -I. -Ilib -Iccan \
+            -Icompat/jansson-2.9/src -Icompat/civetweb-1.16 \
+            apibridge/*.c cgminer-apibridge.c
+
+      - name: ruff - apibridge tools
+        run: ruff check apibridge/tools/*.py
+
+      - name: shellcheck - apibridge tools
+        run: shellcheck apibridge/tools/hw-smoke-test.sh
+
+  build:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gekko
+            configure_flags: --enable-gekko
+          - name: gekko+apibridge
+            configure_flags: --enable-gekko --enable-apibridge
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential autoconf automake libtool pkg-config \
+            libcurl4-openssl-dev libudev-dev libusb-1.0-0-dev \
+            libncurses5-dev zlib1g-dev
+
+      - name: autogen
+        run: ./autogen.sh
+
+      - name: configure
+        run: CFLAGS="-O2 -Wall -fcommon" ./configure ${{ matrix.configure_flags }}
+
+      - name: make
+        run: make -j$(nproc)
+
+      - name: unit tests
+        run: make check
+
+      - name: smoke test - cgminer binary
+        run: |
+          ./cgminer --help >/dev/null
+          ./cgminer --version
+
+      - name: smoke test - apibridged binary
+        if: contains(matrix.configure_flags, '--enable-apibridge')
+        run: |
+          test -x ./apibridged
+          # apibridged requires CGMINER_APIBRIDGE_TOKEN; confirm it fails
+          # fast with a clear error rather than hanging, without a real
+          # cgminer to talk to. The leading "!" is required so this
+          # expected-nonzero exit doesn't trip "set -e" itself.
+          ! timeout 5 ./apibridged
+
+      - name: component test - apibridged against a fake cgminer
+        if: contains(matrix.configure_flags, '--enable-apibridge')
+        run: apibridge/tools/component-test.py
+
+      - name: upload binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}-${{ github.sha }}
+          path: |
+            cgminer
+            apibridged
+          if-no-files-found: ignore

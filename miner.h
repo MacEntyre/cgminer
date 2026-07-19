@@ -1040,6 +1040,12 @@ extern int opt_api_port;
 extern char *opt_api_host;
 extern bool opt_api_listen;
 extern bool opt_api_network;
+#ifdef USE_APIBRIDGE
+extern bool opt_api_bridge;
+extern int opt_api_bridge_port;
+extern char *opt_api_bridge_bind;
+extern char *opt_api_bridge_token_file;
+#endif
 extern bool opt_delaynet;
 extern time_t last_getwork;
 extern bool opt_restart;
@@ -1166,6 +1172,10 @@ extern int opt_usbdump;
 extern bool opt_usb_list_all;
 extern cgsem_t usb_resource_sem;
 extern int libusb_ign_tmo;
+#endif
+#ifdef USE_APIBRIDGE
+extern cgsem_t api_ready_sem;
+extern bool cgminer_api_listening;
 #endif
 #ifdef USE_BITFORCE
 extern bool opt_bfl_noncerange;
