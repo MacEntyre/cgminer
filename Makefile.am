@@ -20,6 +20,7 @@ EXTRA_DIST	= example.conf linux-usb-cgminer \
 		  API.class API.java api-example.c windows-build.txt \
 		  mac-build.txt bitstreams/README API-README FPGA-README \
 		  bitforce-firmware-flash.c hexdump.c ASIC-README \
+		  APIBRIDGE-README \
 		  01-cgminer.rules
 
 SUBDIRS		= lib compat ccan

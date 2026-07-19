@@ -95,6 +95,10 @@ GSA1/GSA2 devices have a second USB interface (`info->telemetry`) connected to a
 
 When `!opt_gekko_noboost` and the pool sends a `vmask`, BM1387 and BM1397 devices send work with 2/4 midstates (`info->midstates`), multiplying effective throughput without increasing USB bandwidth proportionally. The `--gekko-noboost` and `--gekko-lowboost` flags disable or limit this.
 
+### apibridge Companion Process
+
+`apibridge` is a second, separate binary (opt-in via `--enable-apibridge` / `--api-bridge`) that exposes cgminer's RPC API (`api.c`) as a modern HTTP/WebSocket JSON API for a future mobile dashboard. It is fork/exec'd and supervised by cgminer (`cgminer-apibridge.c`: crash/respawn with backoff, clean shutdown) so a bug in the web-facing code can never affect the mining threads, and vice versa. It only talks to cgminer over the existing local RPC socket — no shared address space, no direct access to `COMPAC_INFO`. Currently Phase 1 (read-only monitoring) only; see `APIBRIDGE-README` for the full protocol, endpoints, and the Phase 2/3 roadmap (control endpoints, TLS, discovery).
+
 ### Key Source Files
 
 - `driver-gekko.c` — entire GekkoScience driver (~7600 lines); all device-specific logic
@@ -103,6 +107,8 @@ When `!opt_gekko_noboost` and the pool sends a `vmask`, BM1387 and BM1397 device
 - `usbgekdev.h` — placeholder for extra dev-only USB device strings (empty in production)
 - `cgminer.c` — CLI option definitions for all `--gekko-*` flags (around line 1966)
 - `miner.h` — `opt_gekko_*` extern declarations; `device_drv` vtable definition
+- `cgminer-apibridge.c` / `.h` — fork/exec + supervision glue for the apibridge companion process (see above)
+- `apibridge/` — the apibridge binary's own sources (HTTP/WebSocket server, cgminer RPC client, poll cache); see `APIBRIDGE-README`
 
 ## Git Workflow
 
