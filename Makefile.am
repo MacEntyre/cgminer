@@ -21,6 +21,7 @@ EXTRA_DIST	= example.conf linux-usb-cgminer \
 		  mac-build.txt bitstreams/README API-README FPGA-README \
 		  bitforce-firmware-flash.c hexdump.c ASIC-README \
 		  APIBRIDGE-README \
+		  apibridge/tools/hw-smoke-test.sh apibridge/tools/ws_probe.py \
 		  01-cgminer.rules
 
 SUBDIRS		= lib compat ccan

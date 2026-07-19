@@ -31,6 +31,14 @@ static pthread_t poll_thread_id;
 static volatile bool poll_running;
 static statscache_update_cb update_cb;
 
+/* Guards poll_running/wake for the poll thread's sleep. A plain usleep()
+ * between poll cycles can't be interrupted, so statscache_stop() would have
+ * to wait out the full poll interval before pthread_join() returns - racing
+ * (and often losing) against cgminer's own APIBRIDGE_STOP_TIMEOUT_MS on
+ * SIGTERM and getting SIGKILL'd instead of exiting cleanly. */
+static pthread_mutex_t sleep_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t sleep_cond = PTHREAD_COND_INITIALIZER;
+
 static void entry_update(struct cache_entry *entry, const char *command)
 {
 	json_t *resp = cgclient_query(g_config.cgminer_host, g_config.cgminer_port, command, 3);
@@ -130,7 +138,20 @@ static void *poll_thread(void *arg)
 			json_decref(envelope);
 		}
 
-		usleep((useconds_t)g_config.poll_interval_ms * 1000);
+		pthread_mutex_lock(&sleep_lock);
+		if (poll_running) {
+			struct timespec deadline;
+
+			clock_gettime(CLOCK_REALTIME, &deadline);
+			deadline.tv_sec += g_config.poll_interval_ms / 1000;
+			deadline.tv_nsec += (long)(g_config.poll_interval_ms % 1000) * 1000000L;
+			if (deadline.tv_nsec >= 1000000000L) {
+				deadline.tv_sec++;
+				deadline.tv_nsec -= 1000000000L;
+			}
+			pthread_cond_timedwait(&sleep_cond, &sleep_lock, &deadline);
+		}
+		pthread_mutex_unlock(&sleep_lock);
 	}
 	return NULL;
 }
@@ -148,6 +169,9 @@ void statscache_stop(void)
 {
 	if (!poll_running)
 		return;
+	pthread_mutex_lock(&sleep_lock);
 	poll_running = false;
+	pthread_cond_signal(&sleep_cond);
+	pthread_mutex_unlock(&sleep_lock);
 	pthread_join(poll_thread_id, NULL);
 }

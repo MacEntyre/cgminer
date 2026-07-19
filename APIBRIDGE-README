@@ -92,6 +92,28 @@ If cgminer becomes unreachable, the last-known-good data keeps being
 served with "stale":true rather than an error, so a dashboard has
 something to show instead of a blank screen.
 
+TESTING AGAINST REAL HARDWARE
+
+The CI build (see .github/workflows/build.yml) only smoke-tests that
+apibridged starts and fails fast without a running cgminer - GitHub-hosted
+runners have no USB access to actual miners. To exercise the full stack
+(device detection, REST endpoints, the WebSocket stream, and clean
+shutdown) against a physically attached GekkoScience device, run:
+
+    apibridge/tools/hw-smoke-test.sh <gekko-detect-flag> [pool] [user] [pass]
+
+e.g. for a Compac A1:
+
+    apibridge/tools/hw-smoke-test.sh --gekko-compaca1-detect \
+        stratum+tcp://stratum.braiins.com:3333 MyWorker.test x
+
+This is a manual, opt-in script (not run by CI) that starts cgminer
+against the given pool with the given device, waits for apibridge to come
+up, checks /health, /summary, /devs, /pools (with and without the bearer
+token), reads a few live frames off /stream via a small stdlib-only
+WebSocket client (apibridge/tools/ws_probe.py), and verifies cgminer can
+shut down apibridged cleanly within its SIGTERM grace period.
+
 SECURITY NOTE
 
 Phase 1 has no TLS and binds to 0.0.0.0 by default (LAN-reachable) since
