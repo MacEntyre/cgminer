@@ -56,3 +56,12 @@ jobs:
           # cgminer to talk to. The leading "!" is required so this
           # expected-nonzero exit doesn't trip "set -e" itself.
           ! timeout 5 ./apibridged
+
+      - name: upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}-${{ github.sha }}
+          path: |
+            cgminer
+            apibridged
+          if-no-files-found: ignore
