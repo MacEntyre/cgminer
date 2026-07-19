@@ -42,8 +42,11 @@ static volatile bool apibridge_shutting_down;
 static volatile bool apibridge_supervised;
 static cgsem_t apibridge_stopped_sem;
 static char apibridge_token[APIBRIDGE_TOKEN_BYTES * 2 + 1];
+static char apibridge_write_token[APIBRIDGE_TOKEN_BYTES * 2 + 1];
 
-static bool generate_token(void)
+/* token_out must point at a buffer of at least APIBRIDGE_TOKEN_BYTES*2+1
+ * bytes. Shared by both the read-only and write-scoped tokens. */
+static bool generate_token(char *token_out)
 {
 	unsigned char raw[APIBRIDGE_TOKEN_BYTES];
 	FILE *rnd;
@@ -62,40 +65,43 @@ static bool generate_token(void)
 	fclose(rnd);
 
 	for (i = 0; i < APIBRIDGE_TOKEN_BYTES; i++)
-		snprintf(&apibridge_token[i * 2], 3, "%02x", raw[i]);
+		snprintf(&token_out[i * 2], 3, "%02x", raw[i]);
 
 	return true;
 }
 
-static bool write_token_file(char *path_out, size_t path_out_siz)
+/* configured_path overrides <cgminer_path>/default_name when non-NULL.
+ * label ("auth"/"write") is only used for log messages. */
+static bool write_token_file(char *path_out, size_t path_out_siz, const char *configured_path,
+			      const char *default_name, const char *token, const char *label)
 {
 	int fd;
 	FILE *f;
 
-	if (opt_api_bridge_token_file)
-		snprintf(path_out, path_out_siz, "%s", opt_api_bridge_token_file);
+	if (configured_path)
+		snprintf(path_out, path_out_siz, "%s", configured_path);
 	else
-		snprintf(path_out, path_out_siz, "%sapibridge.token", cgminer_path);
+		snprintf(path_out, path_out_siz, "%s%s", cgminer_path, default_name);
 
 	/* Create with restrictive permissions from the outset rather than
 	 * chmod'ing afterwards, to avoid a window where the token is
 	 * world-readable. */
 	fd = open(path_out, O_WRONLY | O_CREAT | O_TRUNC, 0600);
 	if (fd < 0) {
-		applog(LOG_ERR, "apibridge: failed to open token file %s (%s)", path_out, strerror(errno));
+		applog(LOG_ERR, "apibridge: failed to open %s token file %s (%s)", label, path_out, strerror(errno));
 		return false;
 	}
 
 	f = fdopen(fd, "w");
 	if (!f) {
-		applog(LOG_ERR, "apibridge: fdopen failed for token file %s (%s)", path_out, strerror(errno));
+		applog(LOG_ERR, "apibridge: fdopen failed for %s token file %s (%s)", label, path_out, strerror(errno));
 		close(fd);
 		return false;
 	}
-	fprintf(f, "%s\n", apibridge_token);
+	fprintf(f, "%s\n", token);
 	fclose(f);
 
-	applog(LOG_WARNING, "apibridge: auth token written to %s", path_out);
+	applog(LOG_WARNING, "apibridge: %s token written to %s", label, path_out);
 	return true;
 }
 
@@ -138,8 +144,13 @@ static void exec_apibridge_child(void)
 	argv_[argc_++] = bridge_port_s;
 	argv_[argc_++] = NULL;
 
-	/* Token goes via env var, not argv, so it doesn't show up in `ps`. */
+	/* Tokens go via env var, not argv, so they don't show up in `ps`. The
+	 * write token is only set when control endpoints are enabled - its
+	 * mere presence in apibridge's environment is what apibridge itself
+	 * uses to decide whether to register the control routes at all. */
 	setenv("CGMINER_APIBRIDGE_TOKEN", apibridge_token, 1);
+	if (opt_api_bridge_control)
+		setenv("CGMINER_APIBRIDGE_WRITE_TOKEN", apibridge_write_token, 1);
 	if (opt_api_bridge_bind)
 		setenv("CGMINER_APIBRIDGE_BIND", opt_api_bridge_bind, 1);
 
@@ -226,10 +237,24 @@ void start_apibridge(void)
 		return;
 	}
 
-	if (!generate_token())
+	if (!generate_token(apibridge_token))
 		return;
-	if (!write_token_file(token_path, sizeof(token_path)))
+	if (!write_token_file(token_path, sizeof(token_path), opt_api_bridge_token_file,
+			       "apibridge.token", apibridge_token, "auth"))
 		return;
+
+	if (opt_api_bridge_control) {
+		char write_token_path[PATH_MAX];
+
+		if (!generate_token(apibridge_write_token))
+			return;
+		if (!write_token_file(write_token_path, sizeof(write_token_path), opt_api_bridge_write_token_file,
+				       "apibridge-write.token", apibridge_write_token, "write"))
+			return;
+		applog(LOG_WARNING, "apibridge: control endpoints enabled - this requires cgminer to "
+				     "also be started with --api-allow granting W to 127.0.0.1, e.g. "
+				     "--api-allow W:127.0.0.1, or all control requests will be denied");
+	}
 
 	cgsem_init(&apibridge_stopped_sem);
 

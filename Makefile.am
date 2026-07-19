@@ -241,6 +241,7 @@ apibridged_SOURCES = apibridge/main.c \
 		     apibridge/httpapi.c apibridge/httpapi.h \
 		     apibridge/wsapi.c apibridge/wsapi.h \
 		     apibridge/auth.c apibridge/auth.h \
+		     apibridge/control.c apibridge/control.h \
 		     apibridge/settings.c apibridge/settings.h \
 		     apibridge/apibridge.h \
 		     compat/civetweb-1.16/civetweb.c compat/civetweb-1.16/civetweb.h
@@ -248,7 +249,7 @@ apibridged_CPPFLAGS = $(PTHREAD_FLAGS) $(JANSSON_CPPFLAGS) $(CIVETWEB_CPPFLAGS)
 apibridged_LDFLAGS  = $(PTHREAD_FLAGS)
 apibridged_LDADD    = @JANSSON_LIBS@ @PTHREAD_LIBS@
 
-check_PROGRAMS = apibridge_test_auth apibridge_test_settings
+check_PROGRAMS = apibridge_test_auth apibridge_test_settings apibridge_test_control
 TESTS = $(check_PROGRAMS)
 
 apibridge_test_auth_SOURCES = apibridge/tests/test_auth.c apibridge/tests/test_util.h \
@@ -264,4 +265,11 @@ apibridge_test_settings_SOURCES = apibridge/tests/test_settings.c apibridge/test
 				 apibridge/settings.c apibridge/settings.h \
 				 apibridge/apibridge.h
 apibridge_test_settings_CPPFLAGS = -I$(top_srcdir)/apibridge -I$(top_srcdir)/apibridge/tests
+
+apibridge_test_control_SOURCES = apibridge/tests/test_control.c apibridge/tests/test_util.h \
+				apibridge/control.c apibridge/control.h \
+				apibridge/apibridge.h
+apibridge_test_control_CPPFLAGS = $(JANSSON_CPPFLAGS) \
+				-I$(top_srcdir)/apibridge -I$(top_srcdir)/apibridge/tests
+apibridge_test_control_LDADD    = @JANSSON_LIBS@
 endif

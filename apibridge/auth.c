@@ -12,27 +12,32 @@
 #include "apibridge.h"
 #include "auth.h"
 
-bool auth_check_token_string(const char *presented)
+static bool token_matches(const char *presented, const char *expected)
 {
 	size_t token_len, presented_len, i;
 	unsigned char diff = 0;
 
-	if (!presented || !g_config.token)
+	if (!presented || !expected)
 		return false;
 
-	token_len = strlen(g_config.token);
+	token_len = strlen(expected);
 	presented_len = strlen(presented);
 
 	if (token_len != presented_len)
 		return false;
 
 	for (i = 0; i < token_len; i++)
-		diff |= (unsigned char)(presented[i] ^ g_config.token[i]);
+		diff |= (unsigned char)(presented[i] ^ expected[i]);
 
 	return diff == 0;
 }
 
-bool auth_check_request(const struct mg_connection *conn)
+bool auth_check_token_string(const char *presented)
+{
+	return token_matches(presented, g_config.token);
+}
+
+static bool check_request_against(const struct mg_connection *conn, const char *expected)
 {
 	static const char prefix[] = "Bearer ";
 	const char *header = mg_get_header(conn, "Authorization");
@@ -40,12 +45,24 @@ bool auth_check_request(const struct mg_connection *conn)
 	char token_buf[128];
 
 	if (header && strncmp(header, prefix, sizeof(prefix) - 1) == 0)
-		return auth_check_token_string(header + sizeof(prefix) - 1);
+		return token_matches(header + sizeof(prefix) - 1, expected);
 
 	ri = mg_get_request_info(conn);
 	if (ri && ri->query_string &&
 	    mg_get_var(ri->query_string, strlen(ri->query_string), "token", token_buf, sizeof(token_buf)) > 0)
-		return auth_check_token_string(token_buf);
+		return token_matches(token_buf, expected);
 
 	return false;
+}
+
+bool auth_check_request(const struct mg_connection *conn)
+{
+	return check_request_against(conn, g_config.token);
+}
+
+bool auth_check_write_request(const struct mg_connection *conn)
+{
+	if (!g_config.write_token)
+		return false;
+	return check_request_against(conn, g_config.write_token);
 }

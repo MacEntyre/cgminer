@@ -26,6 +26,7 @@
 #include <jansson.h>
 
 #include "apibridge.h"
+#include "control.h"
 #include "settings.h"
 #include "httpapi.h"
 #include "statscache.h"
@@ -72,6 +73,22 @@ int main(int argc, char **argv)
 	char port_buf[64];
 
 	config_parse_args(argc, argv, &g_config);
+
+	if (g_config.write_token) {
+		/* One-shot at startup, not re-checked per request: this is a
+		 * static ACL config on cgminer's side (--api-allow), not
+		 * something that flaps. A blocking call here is fine - cgminer
+		 * only spawns apibridge once its own API socket is already
+		 * confirmed listening. */
+		bool available = control_check_privileged();
+
+		control_set_available(available);
+		if (!available) {
+			bridge_log("control endpoints enabled but cgminer denied the 'privileged' check - "
+				   "start cgminer with --api-allow granting W to 127.0.0.1, e.g. "
+				   "--api-allow W:127.0.0.1, or all control requests will be rejected");
+		}
+	}
 
 	signal(SIGTERM, handle_signal);
 	signal(SIGINT, handle_signal);

@@ -15,6 +15,15 @@
 #   apibridge/tools/hw-smoke-test.sh --gekko-compaca1-detect \
 #       stratum+tcp://stratum.braiins.com:3333 MyWorker.test x
 #
+# Set HW_SMOKE_TEST_CONTROL=1 to also exercise the Phase 2 control endpoint
+# end to end against the real device (starts cgminer with
+# --api-bridge-control --api-allow W:127.0.0.1, then relays a "zeromaxt"
+# ascset - chosen because it's a no-op on a healthy device, unlike freq/corev,
+# so this doesn't perturb whatever the device is actually doing). Off by
+# default since it changes cgminer's ACL and talks to the write endpoint;
+# left as an opt-in env var rather than a positional arg so the common case
+# (just check the REST/WebSocket surface) stays a one-line invocation.
+#
 # See CLAUDE.md's "Device Identity -> ASIC Mapping" table for the detect
 # flag matching your hardware.
 
@@ -24,6 +33,7 @@ DETECT_FLAG="${1:?usage: $0 <gekko-detect-flag> [pool] [user] [pass]}"
 POOL="${2:-stratum+tcp://stratum.braiins.com:3333}"
 USER="${3:-test.worker}"
 PASS="${4:-x}"
+TEST_CONTROL="${HW_SMOKE_TEST_CONTROL:-0}"
 
 cd "$(dirname "$0")/../.." || exit 1
 
@@ -34,7 +44,8 @@ fi
 
 LOG="$(mktemp -t apibridge-hwtest-XXXXXX.log)"
 TOKEN_FILE="./apibridge.token"
-rm -f "$TOKEN_FILE"
+WRITE_TOKEN_FILE="./apibridge-write.token"
+rm -f "$TOKEN_FILE" "$WRITE_TOKEN_FILE"
 
 fail=0
 note() { printf '\n== %s ==\n' "$1"; }
@@ -47,9 +58,13 @@ check() {
 	fi
 }
 
+CGMINER_ARGS=(-T "$DETECT_FLAG" --api-listen --api-bridge -o "$POOL" -u "$USER" -p "$PASS" --verbose)
+if [ "$TEST_CONTROL" = "1" ]; then
+	CGMINER_ARGS+=(--api-bridge-control --api-allow "W:127.0.0.1")
+fi
+
 note "starting cgminer against $POOL as $USER, detect flag $DETECT_FLAG"
-./cgminer -T "$DETECT_FLAG" --api-listen --api-bridge \
-	-o "$POOL" -u "$USER" -p "$PASS" --verbose >"$LOG" 2>&1 &
+./cgminer "${CGMINER_ARGS[@]}" >"$LOG" 2>&1 &
 CGMINER_PID=$!
 
 note "waiting for device detection and apibridge token"
@@ -86,6 +101,34 @@ check "GET /summary without token is rejected" "$code" "401"
 note "devs payload (spot-check real device fields)"
 curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/devs
 
+if [ "$TEST_CONTROL" = "1" ]; then
+	note "control endpoint (zeromaxt - non-destructive, see comment at top of this script)"
+	for _ in $(seq 1 20); do
+		[ -f "$WRITE_TOKEN_FILE" ] && break
+		sleep 1
+	done
+	if [ ! -f "$WRITE_TOKEN_FILE" ]; then
+		echo "FAIL apibridge write token never appeared - check $LOG" >&2
+		fail=1
+	else
+		WRITE_TOKEN=$(cat "$WRITE_TOKEN_FILE")
+
+		available=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/health \
+			| python3 -c 'import json,sys; print(json.load(sys.stdin).get("control_available"))')
+		check "control_available on /health" "$available" "True"
+
+		code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+			-H "Authorization: Bearer $WRITE_TOKEN" -H "Content-Type: application/json" \
+			-d '{"asc_id":0,"option":"zeromaxt"}' http://127.0.0.1:4029/api/v1/control)
+		check "POST /control zeromaxt with write token" "$code" "200"
+
+		code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+			-H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+			-d '{"asc_id":0,"option":"zeromaxt"}' http://127.0.0.1:4029/api/v1/control)
+		check "POST /control with read-only token is rejected" "$code" "401"
+	fi
+fi
+
 note "WebSocket /stream (3 live frames)"
 python3 "$(dirname "$0")/ws_probe.py" 127.0.0.1 4029 "$TOKEN" 3 | grep -c '"type":"stats"' \
 	| { read -r n; check "stream frames received" "$n" "3"; }
@@ -100,7 +143,7 @@ else
 	echo "OK   apibridged exited within grace period"
 fi
 
-rm -f "$TOKEN_FILE"
+rm -f "$TOKEN_FILE" "$WRITE_TOKEN_FILE"
 note "full log: $LOG"
 
 if [ "$fail" -ne 0 ]; then

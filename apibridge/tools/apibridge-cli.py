@@ -24,14 +24,36 @@ Commands:
     devs                    GET /api/v1/devs
     pools                   GET /api/v1/pools
     stream [-n N]           Follow /api/v1/stream (Ctrl+C to stop; N frames then exit, default: unlimited)
+    control                 POST /api/v1/control (or /api/v1/control/reset with --reset) -
+                          requires cgminer to have been started with
+                          --api-bridge-control (see APIBRIDGE-README's
+                          Phase 2 section)
 
     All commands accept --json to print the raw API response instead of
     a condensed human-readable summary.
+
+Control options (in addition to the connection options above):
+    --asc-id N               ASC device index, same as in `devs` (default: 0)
+    --option NAME             One of: freq, target, corev, setfan, lockfreq,
+                              unlockfreq, zeromaxt (required unless --reset)
+    --value N                 Numeric value, required for freq/target/corev/setfan
+    --reset                   Hit /api/v1/control/reset instead (device reinit)
+    --write-token TOKEN         Write-scoped bearer token (overrides --write-token-file/env)
+    --write-token-file PATH      Read write token from this file (default: looks
+                              for ./apibridge-write.token, then
+                              <repo-root>/apibridge-write.token)
+
+    The write token is separate from the read token above - it is also read
+    from the APIBRIDGE_WRITE_TOKEN environment variable if neither
+    --write-token nor --write-token-file finds one.
 
 Examples:
     apibridge-cli.py summary
     apibridge-cli.py --host 192.168.1.50 devs --json
     apibridge-cli.py stream -n 5
+    apibridge-cli.py control --asc-id 0 --option freq --value 650
+    apibridge-cli.py control --asc-id 0 --option zeromaxt
+    apibridge-cli.py control --asc-id 0 --reset
 """
 import argparse
 import json
@@ -48,13 +70,14 @@ from _ws import connect, read_frame
 # regardless of where you invoke this from.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT_TOKEN = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "apibridge.token"))
+REPO_ROOT_WRITE_TOKEN = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "apibridge-write.token"))
 
 
-def resolve_token(args):
-    if args.token:
-        return args.token, None
+def _resolve_token(explicit, explicit_file, default_candidates, env_var):
+    if explicit:
+        return explicit, None
 
-    candidates = [args.token_file] if args.token_file else ["apibridge.token", REPO_ROOT_TOKEN]
+    candidates = [explicit_file] if explicit_file else default_candidates
     for path in candidates:
         try:
             with open(path) as f:
@@ -62,22 +85,38 @@ def resolve_token(args):
         except OSError:
             continue
 
-    env_token = os.environ.get("APIBRIDGE_TOKEN")
+    env_token = os.environ.get(env_var)
     if env_token:
         return env_token, None
 
     return None, candidates
 
 
-def require_token(args):
-    token, searched = resolve_token(args)
+def _require_token(explicit, explicit_file, default_candidates, env_var, cli_flags):
+    token, searched = _resolve_token(explicit, explicit_file, default_candidates, env_var)
     if token:
         return token
     print("error: no token found (need one for this endpoint)", file=sys.stderr)
     if searched:
         print(f"  tried: {', '.join(searched)}", file=sys.stderr)
-    print("  pass --token TOKEN, --token-file PATH, or set APIBRIDGE_TOKEN", file=sys.stderr)
+    print(f"  pass {cli_flags}, or set {env_var}", file=sys.stderr)
     sys.exit(1)
+
+
+def resolve_token(args):
+    return _resolve_token(args.token, args.token_file, ["apibridge.token", REPO_ROOT_TOKEN],
+                           "APIBRIDGE_TOKEN")
+
+
+def require_token(args):
+    return _require_token(args.token, args.token_file, ["apibridge.token", REPO_ROOT_TOKEN],
+                           "APIBRIDGE_TOKEN", "--token TOKEN, --token-file PATH")
+
+
+def require_write_token(args):
+    return _require_token(args.write_token, args.write_token_file,
+                           ["apibridge-write.token", REPO_ROOT_WRITE_TOKEN],
+                           "APIBRIDGE_WRITE_TOKEN", "--write-token TOKEN, --write-token-file PATH")
 
 
 def http_get(url, token=None, timeout=10):
@@ -93,6 +132,25 @@ def http_get(url, token=None, timeout=10):
             return e.code, json.loads(body)
         except ValueError:
             return e.code, {"error": body}
+    except urllib.error.URLError as e:
+        print(f"error: cannot reach apibridge at {url}: {e.reason}", file=sys.stderr)
+        sys.exit(1)
+
+
+def http_post(url, body, token, timeout=10):
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        body_text = e.read().decode(errors="replace")
+        try:
+            return e.code, json.loads(body_text)
+        except ValueError:
+            return e.code, {"error": body_text}
     except urllib.error.URLError as e:
         print(f"error: cannot reach apibridge at {url}: {e.reason}", file=sys.stderr)
         sys.exit(1)
@@ -172,6 +230,45 @@ def cmd_pools(args):
               f"accepted={p.get('Accepted')}  rejected={p.get('Rejected')}")
 
 
+def cmd_control(args):
+    token = require_write_token(args)
+
+    if args.reset:
+        url = f"http://{args.host}:{args.port}/api/v1/control/reset"
+        body = {"asc_id": args.asc_id}
+    else:
+        if not args.option:
+            print("error: --option is required unless --reset is given", file=sys.stderr)
+            sys.exit(1)
+        url = f"http://{args.host}:{args.port}/api/v1/control"
+        body = {"asc_id": args.asc_id, "option": args.option}
+        if args.value is not None:
+            body["value"] = args.value
+
+    status, data = http_post(url, body, token)
+
+    if args.json:
+        print(json.dumps(data, indent=2))
+        return
+
+    if status == 200:
+        print(f"OK: {data.get('message')}")
+        return
+
+    detail = data.get("message") or data.get("error") or data
+    if status == 401:
+        print(f"error: 401 unauthorized from {url} - check --write-token/--write-token-file", file=sys.stderr)
+    elif status == 501:
+        print("error: control endpoints not enabled on this apibridge "
+              "(cgminer needs --api-bridge-control)", file=sys.stderr)
+    elif status == 403:
+        print(f"error: 403 from {url}: {detail} - cgminer likely needs "
+              "--api-allow with a W: rule for apibridge's address", file=sys.stderr)
+    else:
+        print(f"error: HTTP {status} from {url}: {detail}", file=sys.stderr)
+    sys.exit(1)
+
+
 def cmd_stream(args):
     token = require_token(args)
     try:
@@ -228,6 +325,16 @@ def build_parser():
     p.add_argument("-n", "--count", type=int, default=0,
                     help="stop after N frames (default: run until Ctrl+C)")
     p.set_defaults(func=cmd_stream)
+
+    p = sub.add_parser("control")
+    p.add_argument("--asc-id", type=int, default=0)
+    p.add_argument("--option", help="freq, target, corev, setfan, lockfreq, unlockfreq, or zeromaxt")
+    p.add_argument("--value", type=float)
+    p.add_argument("--reset", action="store_true", help="hit /api/v1/control/reset instead (device reinit)")
+    p.add_argument("--write-token")
+    p.add_argument("--write-token-file")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_control)
 
     return parser
 

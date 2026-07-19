@@ -22,13 +22,12 @@
 #define CGCLIENT_CHUNK 4096
 #define CGCLIENT_REQUEST_MAX 256
 
-json_t *cgclient_query(const char *host, int port, const char *command, int timeout_s)
+static json_t *cgclient_send_request(const char *host, int port, const char *request, int req_len,
+				      const char *command, int timeout_s)
 {
 	char port_s[8];
 	struct addrinfo hints, *res, *rp;
 	int sock = -1;
-	char request[CGCLIENT_REQUEST_MAX];
-	int req_len;
 	struct timeval tv;
 	char *buf = NULL;
 	size_t buf_len = 0, buf_cap = 0;
@@ -65,13 +64,6 @@ json_t *cgclient_query(const char *host, int port, const char *command, int time
 	tv.tv_usec = 0;
 	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 	setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-
-	req_len = snprintf(request, sizeof(request), "{\"command\":\"%s\"}", command);
-	if (req_len <= 0 || (size_t)req_len >= sizeof(request)) {
-		bridge_log("cgclient: command too long: %s", command);
-		close(sock);
-		return NULL;
-	}
 
 	/* Must arrive in a single write(): cgminer's api.c does one recv()
 	 * per connection with no partial-read loop. */
@@ -130,4 +122,34 @@ json_t *cgclient_query(const char *host, int port, const char *command, int time
 	}
 
 	return result;
+}
+
+json_t *cgclient_query(const char *host, int port, const char *command, int timeout_s)
+{
+	char request[CGCLIENT_REQUEST_MAX];
+	int req_len;
+
+	req_len = snprintf(request, sizeof(request), "{\"command\":\"%s\"}", command);
+	if (req_len <= 0 || (size_t)req_len >= sizeof(request)) {
+		bridge_log("cgclient: command too long: %s", command);
+		return NULL;
+	}
+
+	return cgclient_send_request(host, port, request, req_len, command, timeout_s);
+}
+
+json_t *cgclient_query_param(const char *host, int port, const char *command, const char *parameter,
+			      int timeout_s)
+{
+	char request[CGCLIENT_REQUEST_MAX];
+	int req_len;
+
+	req_len = snprintf(request, sizeof(request), "{\"command\":\"%s\",\"parameter\":\"%s\"}",
+			    command, parameter);
+	if (req_len <= 0 || (size_t)req_len >= sizeof(request)) {
+		bridge_log("cgclient: command+parameter too long: %s %s", command, parameter);
+		return NULL;
+	}
+
+	return cgclient_send_request(host, port, request, req_len, command, timeout_s);
 }

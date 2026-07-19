@@ -18,7 +18,8 @@ static void usage_and_exit(const char *prog)
 	fprintf(stderr,
 		"Usage: %s [--cgminer-host HOST] [--cgminer-port PORT] [--listen-port PORT] [--poll-interval-ms MS]\n"
 		"Requires CGMINER_APIBRIDGE_TOKEN in the environment.\n"
-		"Optional: CGMINER_APIBRIDGE_BIND to override the listen bind address (default 0.0.0.0).\n",
+		"Optional: CGMINER_APIBRIDGE_BIND to override the listen bind address (default 0.0.0.0).\n"
+		"Optional: CGMINER_APIBRIDGE_WRITE_TOKEN to enable the control routes.\n",
 		prog);
 	exit(1);
 }
@@ -35,6 +36,10 @@ void config_parse_args(int argc, char **argv, struct apibridge_config *cfg)
 	if (!cfg->listen_bind)
 		cfg->listen_bind = "0.0.0.0";
 	cfg->token = getenv("CGMINER_APIBRIDGE_TOKEN");
+	/* Optional: only set by cgminer when --api-bridge-control was given.
+	 * Its mere presence is what enables the control routes - see
+	 * control.c. */
+	cfg->write_token = getenv("CGMINER_APIBRIDGE_WRITE_TOKEN");
 
 	for (i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--cgminer-host") && i + 1 < argc)

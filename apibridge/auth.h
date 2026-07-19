@@ -14,4 +14,10 @@ bool auth_check_token_string(const char *presented);
  * always set custom headers on the upgrade handshake). */
 bool auth_check_request(const struct mg_connection *conn);
 
+/* Same shape as auth_check_request(), but checks against g_config.write_token
+ * instead. Always false if write_token is unset (control not enabled by
+ * cgminer) - callers should prefer returning 501 in that case, see
+ * control.c, rather than treating it as a plain 401. */
+bool auth_check_write_request(const struct mg_connection *conn);
+
 #endif /* __APIBRIDGE_AUTH_H__ */

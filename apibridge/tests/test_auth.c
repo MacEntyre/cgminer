@@ -10,7 +10,15 @@
 /* Unit tests for auth_check_token_string() - the pure comparison at the
  * core of apibridge's bearer-token auth. auth_check_request() itself needs
  * a live struct mg_connection and is exercised end to end instead by
- * apibridge/tools/component-test.py. */
+ * apibridge/tools/component-test.py.
+ *
+ * auth_check_write_request() shares that same comparison logic (via the
+ * internal token_matches() helper) against g_config.write_token instead of
+ * g_config.token, so its request-parsing path is covered the same way, by
+ * component-test.py. The one behavior unique to it - and pure enough to
+ * test here - is that it short-circuits to false without even looking at
+ * the connection when no write token is configured (control not enabled),
+ * which is exactly the 501-vs-401 distinction httpapi.c relies on. */
 
 #include "apibridge.h"
 #include "auth.h"
@@ -31,6 +39,10 @@ int main(void)
 
 	g_config.token = NULL;
 	CHECK("NULL configured token rejected", auth_check_token_string("anything"), false);
+
+	g_config.write_token = NULL;
+	CHECK("unset write token short-circuits without touching conn",
+	      auth_check_write_request(NULL), false);
 
 	TEST_EXIT();
 }

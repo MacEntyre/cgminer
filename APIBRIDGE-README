@@ -54,6 +54,11 @@ Relevant flags:
   --api-bridge-token-file <path>
                                Where to write the generated auth token,
                                default: <install dir>/apibridge.token
+  --api-bridge-control        Enable the Phase 2 control endpoints (see
+                               below), default: disabled
+  --api-bridge-write-token-file <path>
+                               Where to write the generated write-scoped
+                               token, default: <install dir>/apibridge-write.token
 
 On every cgminer start, a random bearer token is generated and written
 (mode 0600) to the token file. Read it to authenticate:
@@ -67,10 +72,6 @@ rotates on every cgminer restart - there is no persistent pairing yet (see
 ROADMAP below).
 
 PHASE 1: READ-ONLY MONITORING
-
-This first phase is deliberately read-only. There is no way to change
-frequency, voltage, or any other miner setting through apibridge yet -
-only cgminer's own RPC API (ascset, see API-README) can do that.
 
   GET /api/v1/summary   Same data as the RPC "summary" command
   GET /api/v1/devs      Same data as the RPC "devs" command
@@ -92,6 +93,78 @@ If cgminer becomes unreachable, the last-known-good data keeps being
 served with "stale":true rather than an error, so a dashboard has
 something to show instead of a blank screen.
 
+PHASE 2: CONTROL ENDPOINTS
+
+Phase 2 relays a whitelisted subset of cgminer's own ascset RPC command
+(see API-README) - it does not reimplement any of ascset's validation.
+Every value driver-gekko.c already clamps (frequency ranges, voltage
+limits, ...) is still clamped by driver-gekko.c; apibridge only decides
+which option *names* it's willing to forward at all.
+
+Enable with --api-bridge-control (see RUNNING above). This also requires
+cgminer to be started with --api-allow granting write access to
+apibridge's own connection, e.g.:
+
+    ./cgminer --api-listen --api-bridge --api-bridge-control \
+        --api-allow W:127.0.0.1 -o stratum+tcp://pool:port -u user -p pass
+
+Without that --api-allow rule, cgminer's own RPC ACL (not apibridge's)
+rejects every ascset request from apibridge with "Access denied" - cgminer
+defaults every API connection, including apibridge's loopback one, to
+read-only. apibridge checks this itself once at startup (cgminer's
+"privileged" RPC command, which does nothing but confirm write access) and
+reports the result as "control_available" on /api/v1/health, so a
+dashboard can grey out controls with a clear reason instead of every
+request silently failing.
+
+  POST /api/v1/control        Body: {"asc_id":0,"option":"freq","value":650}
+                               "value" is omitted for lockfreq/unlockfreq/
+                               zeromaxt. "asc_id" is the same ASC index as
+                               in the "devs" response.
+  POST /api/v1/control/reset  Body: {"asc_id":0} - device reinit, kept as
+                               its own endpoint (not reachable through the
+                               generic "option" field) since it's more
+                               disruptive than the other options.
+
+Whitelisted options for POST /api/v1/control:
+
+  freq        <0-800/1200>   Set frequency (all chips)
+  target      <0-800/1200>   Set the auto-tuning target frequency
+  corev       <0-500>        Set core voltage (GSA1/GSA2 - Compac A2 /
+                              Terminus A2 - only; harmless no-op elsewhere)
+  setfan      <0-100>        Set fan speed % (GSA1/GSA2 V2.1/V3 only)
+  lockfreq    (no value)     Freeze auto-tuning
+  unlockfreq  (no value)     Resume auto-tuning
+  zeromaxt    (no value)     Clear the overtemperature-cooldown latch so a
+                              GSA1/GSA2 device resumes at full frequency
+                              instead of staying throttled (GSA1/GSA2 only;
+                              harmless no-op elsewhere)
+
+These endpoints require a second, write-scoped bearer token - separate
+from the read-only token above, and only generated/handed to apibridge
+when --api-bridge-control is given. Read it the same way:
+
+    curl -H "Authorization: Bearer $(cat apibridge-write.token)" \
+         -H "Content-Type: application/json" \
+         -d '{"asc_id":0,"option":"freq","value":650}' \
+         http://<host>:4029/api/v1/control
+
+The read-only token does *not* work on these routes, and the write token
+does not work on the Phase 1 read routes - they are checked independently.
+If --api-bridge-control was not given at all, both control routes answer
+501 rather than checking any token, so a client can tell "not enabled"
+apart from "wrong token".
+
+Every control request - authorized or not, whitelisted or not, whatever
+cgminer's own ascset verdict was - is written to apibridge's own log
+(stderr, "AUDIT:" prefix) with the source address, asc_id, option, value,
+and outcome. cgminer's own ascset response is relayed back close to
+verbatim: HTTP 200 with cgminer's message on success, 403 if cgminer's ACL
+denied it (the --api-allow requirement above), 422 for any other rejection
+from the driver (e.g. an out-of-range value - the message is
+driver-gekko.c's own, not re-derived by apibridge), 502 if cgminer was
+unreachable.
+
 AUTOMATED TESTS
 
 CI (see .github/workflows/build.yml) runs three layers, none of which need
@@ -99,16 +172,22 @@ real hardware:
 
   - lint job: cppcheck over apibridge/*.c and cgminer-apibridge.c, ruff
     over apibridge/tools/*.py, shellcheck over hw-smoke-test.sh.
-  - unit tests: apibridge/tests/test_auth.c and test_settings.c, plain
-    assert-based C binaries (no framework) exercising the pure logic in
-    auth.c and settings.c. Run locally with `make check` after
+  - unit tests: apibridge/tests/test_auth.c, test_settings.c and
+    test_control.c, plain assert-based C binaries (no framework)
+    exercising the pure logic in auth.c, settings.c, and control.c (the
+    Phase 2 option whitelist, wire-parameter construction, and
+    STATUS-to-HTTP mapping). Run locally with `make check` after
     `./configure --enable-apibridge`.
   - component test: apibridge/tools/component-test.py starts apibridged
     against a fake, stdlib-only stand-in for cgminer's RPC API and drives
     /health, /summary, /devs, /pools (with and without the bearer token,
-    including the ?token= fallback) plus a clean SIGTERM shutdown. Run
-    locally with `apibridge/tools/component-test.py` once cgminer and
-    apibridged are built.
+    including the ?token= fallback), the Phase 2 control routes (control
+    disabled -> 501; enabled with cgminer's ACL granting write access ->
+    200/400 whitelist rejection/401 wrong or read-only token; enabled with
+    cgminer's ACL denying write access -> control_available:false and a
+    403 passthrough), plus a clean SIGTERM shutdown. Run locally with
+    `apibridge/tools/component-test.py` once cgminer and apibridged are
+    built.
 
 TESTING AGAINST REAL HARDWARE
 
@@ -131,7 +210,12 @@ against the given pool with the given device, waits for apibridge to come
 up, checks /health, /summary, /devs, /pools (with and without the bearer
 token), reads a few live frames off /stream via a small stdlib-only
 WebSocket client (apibridge/tools/ws_probe.py), and verifies cgminer can
-shut down apibridged cleanly within its SIGTERM grace period.
+shut down apibridged cleanly within its SIGTERM grace period. Set
+HW_SMOKE_TEST_CONTROL=1 to also start cgminer with --api-bridge-control
+--api-allow W:127.0.0.1 and exercise POST /api/v1/control end to end
+against the real device via a "zeromaxt" call - chosen because it's a
+harmless no-op on a healthy device, unlike freq/corev, so the script
+doesn't perturb whatever the device is actually doing. Off by default.
 
 CLI CLIENT
 
@@ -145,28 +229,31 @@ apibridge/tools/apibridge-cli.py. Stdlib only, no dependencies.
     apibridge/tools/apibridge-cli.py pools
     apibridge/tools/apibridge-cli.py stream          # follow /stream until Ctrl+C
     apibridge/tools/apibridge-cli.py stream -n 5      # 5 frames then exit
+    apibridge/tools/apibridge-cli.py control --asc-id 0 --option freq --value 650
+    apibridge/tools/apibridge-cli.py control --asc-id 0 --option zeromaxt
+    apibridge/tools/apibridge-cli.py control --asc-id 0 --reset
 
 Each command prints a condensed human-readable view by default, or the
 raw JSON response with --json. Connection options (--host, --port) default
 to 127.0.0.1:4029. The bearer token is read from --token, --token-file
 (default: ./apibridge.token, the same relative path cgminer writes it to
 when run from the repo root), or the APIBRIDGE_TOKEN environment
-variable, in that order; /health needs no token. Run with --help for the
-full option list.
+variable, in that order; /health needs no token. The `control` subcommand
+additionally reads the write token from --write-token, --write-token-file
+(default: ./apibridge-write.token), or APIBRIDGE_WRITE_TOKEN. Run with
+--help for the full option list.
 
 SECURITY NOTE
 
-Phase 1 has no TLS and binds to 0.0.0.0 by default (LAN-reachable) since
+Phase 1/2 have no TLS and bind to 0.0.0.0 by default (LAN-reachable) since
 the whole point is a phone on the same network reaching it. Only run this
 on a trusted home/lab LAN. Use --api-bridge-bind 127.0.0.1 if you want to
 pair it with your own reverse proxy or VPN instead of exposing it directly.
+Only pass --api-bridge-control (and the --api-allow W: rule it requires)
+on installs where you actually want remote control - it's off by default
+precisely because it's a bigger blast radius than read-only monitoring.
 
 ROADMAP
-
-Phase 2 (planned): control endpoints (frequency, core voltage, etc.),
-relaying to cgminer's existing ascset validation rather than re-validating
-in apibridge, with a separate write-scoped token and a per-command audit
-log.
 
 Phase 3 (planned): mDNS/Bonjour discovery for the mobile app, TLS, and a
 real per-device pairing flow to replace the current shared-token-file

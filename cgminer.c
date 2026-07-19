@@ -262,6 +262,8 @@ bool opt_api_bridge;
 int opt_api_bridge_port = 4029;
 char *opt_api_bridge_bind = NULL;
 char *opt_api_bridge_token_file = NULL;
+bool opt_api_bridge_control;
+char *opt_api_bridge_write_token_file = NULL;
 #endif
 bool opt_delaynet;
 bool opt_disable_pool;
@@ -1467,6 +1469,13 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITH_ARG("--api-bridge-token-file",
 		     opt_set_charp, NULL, &opt_api_bridge_token_file,
 		     "Path to write the generated apibridge bearer token, default: <cgminer_path>/apibridge.token"),
+	OPT_WITHOUT_ARG("--api-bridge-control",
+			opt_set_bool, &opt_api_bridge_control,
+			"Enable apibridge control endpoints (frequency, core voltage, etc.), default: disabled. "
+			"Requires --api-allow with a W: rule covering 127.0.0.1, e.g. --api-allow W:127.0.0.1"),
+	OPT_WITH_ARG("--api-bridge-write-token-file",
+		     opt_set_charp, NULL, &opt_api_bridge_write_token_file,
+		     "Path to write the generated apibridge write-scoped bearer token, default: <cgminer_path>/apibridge-write.token"),
 #endif
 #ifdef USE_ICARUS
 	OPT_WITH_ARG("--au3-freq",

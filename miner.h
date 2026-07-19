@@ -1045,6 +1045,8 @@ extern bool opt_api_bridge;
 extern int opt_api_bridge_port;
 extern char *opt_api_bridge_bind;
 extern char *opt_api_bridge_token_file;
+extern bool opt_api_bridge_control;
+extern char *opt_api_bridge_write_token_file;
 #endif
 extern bool opt_delaynet;
 extern time_t last_getwork;
