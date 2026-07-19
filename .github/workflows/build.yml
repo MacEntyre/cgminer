@@ -5,6 +5,7 @@ on:
     branches:
       - master
       - edition-macentyre
+      - "feature/**"
   pull_request:
     branches:
       - edition-macentyre
