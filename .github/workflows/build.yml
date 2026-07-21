@@ -93,19 +93,24 @@ jobs:
           key: cve-bin-tool-db-${{ github.run_id }}
           restore-keys: cve-bin-tool-db-
 
-      # Directory-mode scan against version-string checkers - this is
-      # what can actually see CVEs in vendored source (e.g.
-      # compat/civetweb-1.16, which has a checker) that no package
-      # manager knows about. It's combined in one invocation with
-      # -i/--input-file, which does a manual vendor/product/version CVE
-      # lookup (CPE-based, via NVD) for components cve-bin-tool has no
-      # dedicated checker for - jansson is one of these (verify with
-      # `cve-bin-tool --help` under "Available checkers" if bumping the
-      # vendored version; the list may change between releases). See
-      # .github/sca-manual-components.csv - add a row there for any other
-      # vendored/first-party library that ends up in the same situation.
-      # -S high also gates the exit code: cve-bin-tool exits 1 only if a
-      # matching (here: high/critical) CVE was found.
+      # Two SEPARATE invocations, not one combined call - cve-bin-tool's
+      # own CLI (cli.py, see the "if not args['directory']:" guard around
+      # the -i/--input-file handling) only runs the manual vendor/product
+      # CVE lookup from -i when NO directory is also being scanned in the
+      # same invocation. Combined into one call, -i's entries are only
+      # checked at all if a checker *also* independently matches the same
+      # product from the directory scan - for jansson (no checker) that
+      # never happens, so it would be silently skipped rather than
+      # reported as clean. Confirmed by inspecting cve-bin-tool 3.4's
+      # source directly after a combined run produced an empty "Products
+      # with No Identified Vulnerabilities" table (jansson wasn't even
+      # listed as checked).
+      #
+      # -S high gates the exit code: cve-bin-tool exits 1 only if a
+      # matching (here: high/critical) CVE was found. Both invocations
+      # run unconditionally (set +e / capture both exit codes) so both
+      # reports always get produced and uploaded, and the job still fails
+      # if either found something.
       #
       # NVD_API_KEY is optional: cve-bin-tool picks it up from the
       # environment automatically. Without it, the first (uncached) NVD
@@ -121,27 +126,43 @@ jobs:
       # the hosted runner out of resources, canceling the job outright
       # (see the run that failed on 2026-07-21). Nothing this repo needs
       # depends on OSV: civetweb is covered by its own checker, jansson
-      # by the manual NVD CPE lookup above - both come from NVD/GAD/RedHat.
+      # by the manual NVD CPE lookup below - both come from NVD/GAD/RedHat.
       - name: cve-bin-tool - scan repo for known-vulnerable component versions
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
+          set +e
+
           cve-bin-tool \
             --exclude .git \
             -d OSV \
-            -i .github/sca-manual-components.csv \
             -S high \
             --format json,console \
             --output-file cve-bin-tool-report.json \
             --report \
             .
+          rc_directory=$?
 
-      # --format json,console + --output-file writes both to files rather
-      # than echoing the human-readable one to the job log (cve-bin-tool
-      # derives the console report's filename from --output-file's stem,
-      # e.g. cve-bin-tool-report.txt) - upload both so the per-product
-      # breakdown (which components were checked vs. which had hits) is
-      # actually inspectable after the run, not just the bare JSON.
+          # cve-bin-tool has no checker for jansson (verify with
+          # `cve-bin-tool --help` under "Available checkers" if bumping
+          # the vendored version - the list may change between
+          # releases). See .github/sca-manual-components.csv - add a row
+          # there for any other vendored/first-party library that ends
+          # up in the same no-checker situation.
+          cve-bin-tool \
+            -i .github/sca-manual-components.csv \
+            -d OSV \
+            -S high \
+            --format json,console \
+            --output-file cve-bin-tool-manual-report.json \
+            --report
+          rc_manual=$?
+
+          set -e
+          if [ "$rc_directory" -ne 0 ] || [ "$rc_manual" -ne 0 ]; then
+            exit 1
+          fi
+
       - name: Upload SCA report
         if: always()
         uses: actions/upload-artifact@v7
@@ -150,6 +171,8 @@ jobs:
           path: |
             cve-bin-tool-report.json
             cve-bin-tool-report.txt
+            cve-bin-tool-manual-report.json
+            cve-bin-tool-manual-report.txt
           if-no-files-found: ignore
 
   build:
