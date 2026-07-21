@@ -36,6 +36,104 @@ jobs:
       - name: shellcheck - apibridge tools
         run: shellcheck apibridge/tools/hw-smoke-test.sh
 
+  sast:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential autoconf automake libtool pkg-config \
+            libcurl4-openssl-dev libudev-dev libusb-1.0-0-dev \
+            libncurses5-dev zlib1g-dev
+
+      # build-mode: manual, not autobuild - the autotools build already
+      # works and gives CodeQL exactly the compile commands it needs,
+      # rather than relying on its build heuristics to find them.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: c-cpp
+          build-mode: manual
+
+      - name: autogen
+        run: ./autogen.sh
+
+      - name: configure
+        run: CFLAGS="-O2 -Wall -fcommon" ./configure --enable-gekko --enable-apibridge
+
+      - name: make
+        run: make -j$(nproc)
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:c-cpp"
+
+  sca:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install cve-bin-tool
+        run: pip install --quiet cve-bin-tool
+
+      # cve-bin-tool's cache holds the downloaded CVE database
+      # (NVD/OSV/...); without caching, every run re-downloads it from
+      # scratch, which is slow and prone to upstream rate limiting.
+      - name: Cache cve-bin-tool CVE database
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/cve-bin-tool
+          key: cve-bin-tool-db-${{ github.run_id }}
+          restore-keys: cve-bin-tool-db-
+
+      # Directory-mode scan against version-string checkers - this is
+      # what can actually see CVEs in vendored source (e.g.
+      # compat/civetweb-1.16, which has a checker) that no package
+      # manager knows about. It's combined in one invocation with
+      # -i/--input-file, which does a manual vendor/product/version CVE
+      # lookup (CPE-based, via NVD) for components cve-bin-tool has no
+      # dedicated checker for - jansson is one of these (verify with
+      # `cve-bin-tool --help` under "Available checkers" if bumping the
+      # vendored version; the list may change between releases). See
+      # .github/sca-manual-components.csv - add a row there for any other
+      # vendored/first-party library that ends up in the same situation.
+      # -S high also gates the exit code: cve-bin-tool exits 1 only if a
+      # matching (here: high/critical) CVE was found.
+      #
+      # NVD_API_KEY is optional: cve-bin-tool picks it up from the
+      # environment automatically. Without it, the first (uncached) NVD
+      # sync is rate-limited and can take several minutes; set the
+      # NVD_API_KEY repo secret (free, see
+      # https://nvd.nist.gov/developers/request-an-api-key) to speed
+      # that up. Missing/unset just falls back to unauthenticated access.
+      - name: cve-bin-tool - scan repo for known-vulnerable component versions
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          cve-bin-tool \
+            --exclude .git \
+            -i .github/sca-manual-components.csv \
+            -S high \
+            --format json,console \
+            --output-file cve-bin-tool-report.json \
+            --report \
+            .
+
+      - name: Upload SCA report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cve-bin-tool-report-${{ github.sha }}
+          path: cve-bin-tool-report.json
+          if-no-files-found: ignore
+
   build:
     runs-on: ubuntu-22.04
     strategy:
