@@ -113,12 +113,22 @@ jobs:
       # NVD_API_KEY repo secret (free, see
       # https://nvd.nist.gov/developers/request-an-api-key) to speed
       # that up. Missing/unset just falls back to unauthenticated access.
+      #
+      # OSV (-d OSV) is disabled: its sync pulls the *entire*
+      # gs://osv-vulnerabilities bucket via gsutil rsync - advisories for
+      # every ecosystem OSV tracks (npm, PyPI, Go, crates.io, ...), not
+      # just C. On a cold cache this is gigabytes of small files and ran
+      # the hosted runner out of resources, canceling the job outright
+      # (see the run that failed on 2026-07-21). Nothing this repo needs
+      # depends on OSV: civetweb is covered by its own checker, jansson
+      # by the manual NVD CPE lookup above - both come from NVD/GAD/RedHat.
       - name: cve-bin-tool - scan repo for known-vulnerable component versions
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
           cve-bin-tool \
             --exclude .git \
+            -d OSV \
             -i .github/sca-manual-components.csv \
             -S high \
             --format json,console \
