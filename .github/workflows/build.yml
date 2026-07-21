@@ -136,12 +136,20 @@ jobs:
             --report \
             .
 
+      # --format json,console + --output-file writes both to files rather
+      # than echoing the human-readable one to the job log (cve-bin-tool
+      # derives the console report's filename from --output-file's stem,
+      # e.g. cve-bin-tool-report.txt) - upload both so the per-product
+      # breakdown (which components were checked vs. which had hits) is
+      # actually inspectable after the run, not just the bare JSON.
       - name: Upload SCA report
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: cve-bin-tool-report-${{ github.sha }}
-          path: cve-bin-tool-report.json
+          path: |
+            cve-bin-tool-report.json
+            cve-bin-tool-report.txt
           if-no-files-found: ignore
 
   build:
