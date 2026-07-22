@@ -32,6 +32,12 @@ cgminer_CPPFLAGS = $(PTHREAD_FLAGS) -fno-strict-aliasing $(JANSSON_CPPFLAGS) $(U
 
 bin_PROGRAMS	= cgminer
 
+# Populated additively (+=) below, per optional component (HAS_GEKKO,
+# HAS_APIBRIDGE, ...) - declared unconditionally here so a build with only
+# one of those components enabled doesn't silently lose the other's tests.
+check_PROGRAMS =
+TESTS = $(check_PROGRAMS)
+
 cgminer_LDFLAGS	= $(PTHREAD_FLAGS)
 cgminer_LDADD	= $(DLOPEN_FLAGS) @LIBCURL_LIBS@ @JANSSON_LIBS@ @LIBZ_LIBS@ @PTHREAD_LIBS@ \
 		  @NCURSES_LIBS@ @PDCURSES_LIBS@ @WS2_LIBS@ \
@@ -225,7 +231,15 @@ cgminer_SOURCES += driver-flow.c
 endif
 
 if HAS_GEKKO
-cgminer_SOURCES += driver-gekko.c driver-gekko.h
+cgminer_SOURCES += driver-gekko.c driver-gekko.h \
+		   driver-gekko-telem.c driver-gekko-telem.h
+
+check_PROGRAMS += gekko_test_telem
+
+gekko_test_telem_SOURCES = tests/test_gekko_telem.c apibridge/tests/test_util.h \
+			    driver-gekko-telem.c driver-gekko-telem.h
+gekko_test_telem_CPPFLAGS = $(JANSSON_CPPFLAGS) $(USBUTILS_CPPFLAGS) \
+			     -I$(top_srcdir)/apibridge/tests
 endif
 
 if HAS_APIBRIDGE
@@ -248,8 +262,7 @@ apibridged_CPPFLAGS = $(PTHREAD_FLAGS) $(JANSSON_CPPFLAGS) $(CIVETWEB_CPPFLAGS)
 apibridged_LDFLAGS  = $(PTHREAD_FLAGS)
 apibridged_LDADD    = @JANSSON_LIBS@ @PTHREAD_LIBS@
 
-check_PROGRAMS = apibridge_test_auth apibridge_test_settings
-TESTS = $(check_PROGRAMS)
+check_PROGRAMS += apibridge_test_auth apibridge_test_settings
 
 apibridge_test_auth_SOURCES = apibridge/tests/test_auth.c apibridge/tests/test_util.h \
 			     apibridge/auth.c apibridge/auth.h \

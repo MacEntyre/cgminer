@@ -11,6 +11,7 @@
  */
 
 #include "driver-gekko.h"
+#include "driver-gekko-telem.h"
 #include "crc.h"
 #include "compat.h"
 #include <unistd.h>
@@ -4184,86 +4185,6 @@ applog(LOG_ERR, "DBG BF sending work");
 	return NULL;
 }
 
-static inline float telem_tovin(unsigned char ch)
-{
-	// value 0..255
-	// linear volt 0..6.0
-	return (float)(ch) * (6.0 / 255.0);
-}
-
-static inline float telem_tovinv2(unsigned char ch)
-{
-	// value 0..255
-	// linear volt 0..(2.048*12)
-	return (float)(ch) * (2.048 / 255.0) * 12.0;
-}
-
-static float telem_tovout(unsigned char ch)
-{
-	float vout;
-
-	// value 0..255
-	// linear volt always 0..2.048 across 2 chips
-	vout = (float)(ch) * (2.048 / 255.0) / 2.0;
-	return vout;
-}
-
-// not possible value meaning invalid
-#define TELEM_INVTEMP -999
-
-static float telem_totemp(unsigned char ch)
-{
-	// rather than the impossible -50
-	if (ch == 0)
-		return TELEM_INVTEMP;
-
-	if (ch > 218)
-		return 125.0;
-
-	// value 0..218
-	// linear temp -50..125 = 175 range
-	return (float)(ch) * (175.0 / 218.0) - 50.0;
-}
-
-static unsigned char corev_totelem(int corev)
-{
-	int telem;
-
-	// value 0..500
-	if (corev < 0)
-		corev = 0;
-	if (corev > 500)
-		corev = 500;
-
-	// linear telem 0..100
-	telem = corev / 5;
-
-	return (unsigned char)(telem);
-}
-
-// same calc for both iin and iout
-static float telem_toiinout(unsigned char ch, bool hi)
-{
-	// value 0..255
-	// hi linear current 0..(2.048*20) (40.96)
-	// lo linear current 0..(2.048*3.125) (6.4)
-	float factor;
-	if (hi)
-		factor = 20.0;
-	else
-		factor = 3.125;
-
-	return (float)(ch) * (2.048 / 255.0) * factor;
-}
-
-static float telem_totach(unsigned char ch)
-{
-	applog(LOG_DEBUG, "%s(%d)->%d", __func__, (int)ch, (int)ch * 30);
-	// value 0..255
-	// linear rpm ch*30
-	return (float)(ch) * 30.0;
-}
-
 // if setting up telemetry fails this many times, assume there's no telemetry
 // however if the chip wont mine, NONONCE will reset, which zeros the counter,
 //  so it always tries again after the reset
@@ -6776,9 +6697,13 @@ static void compac_statline(char *buf, size_t bufsiz, struct cgpu_info *compac)
 		char fan0[16] = "";
 		char t2[8] = "";
 
-		if (TELEM_IS_V2_1(info))
+		if (TELEM_IS_V2(info))
 		{
-			snprintf(t2, sizeof(t2), "/%.0f", info->telem_temp2);
+			/* TEMP2 is only present in the V2.1 mask - plain V2.0 boards
+			 * don't have it, but do carry a working tach (see canfan
+			 * comment in compac_api_set()). */
+			if (TELEM_IS_V2_1(info))
+				snprintf(t2, sizeof(t2), "/%.0f", info->telem_temp2);
 
 			if (info->telem_tach == 0 && info->last_telem.tv_sec > 0)
 			{
@@ -7403,7 +7328,12 @@ static char *compac_api_set(struct cgpu_info *compac, char *option, char *settin
 		{
 			bool canfan = false;
 
-			if (TELEM_IS_V2_1(info)
+			/* TELEM_MASK_V2_0 already carries TELEM_MASK_TACH (see
+			 * driver-gekko.h) - plain V2.0 boards report a working tach
+			 * exactly like V2.1 (get_gsa1_telem() parses TELEM_TACH for
+			 * any TELEM_IS_V2(), not just V2.1), so gate on V2 as a whole
+			 * rather than singling out V2.1. */
+			if (TELEM_IS_V2(info)
 			||  (TELEM_IS_V3(info) && TELEM_HAS_TACH(info)))
 				canfan = true;
 
@@ -7604,14 +7534,14 @@ static char *compac_api_set(struct cgpu_info *compac, char *option, char *settin
 	{
 		bool canfan = false;
 
-		if (TELEM_IS_V2_1(info)
+		if (TELEM_IS_V2(info)
 		||  (TELEM_IS_V3(info) && TELEM_HAS_TACH(info)))
 			canfan = true;
 
 		if ((info->ident != IDENT_GSA1 && info->ident != IDENT_GSA2)
 		||  (!canfan))
 		{
-			snprintf(replybuf, siz, "setfan only for GSA1/2 V2.1/V3");
+			snprintf(replybuf, siz, "setfan only for GSA1/2 V2/V3");
 			return replybuf;
 		}
 
