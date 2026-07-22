@@ -26,6 +26,7 @@ struct cache_entry {
 static struct cache_entry summary_entry = { PTHREAD_MUTEX_INITIALIZER, NULL, true, 0 };
 static struct cache_entry devs_entry    = { PTHREAD_MUTEX_INITIALIZER, NULL, true, 0 };
 static struct cache_entry pools_entry   = { PTHREAD_MUTEX_INITIALIZER, NULL, true, 0 };
+static struct cache_entry stats_entry   = { PTHREAD_MUTEX_INITIALIZER, NULL, true, 0 };
 
 static pthread_t poll_thread_id;
 static volatile bool poll_running;
@@ -81,9 +82,15 @@ json_t *statscache_get(const char *key, bool *stale, double *age_s)
 		return entry_get(&devs_entry, stale, age_s);
 	if (!strcmp(key, "pools"))
 		return entry_get(&pools_entry, stale, age_s);
+	if (!strcmp(key, "stats"))
+		return entry_get(&stats_entry, stale, age_s);
 	return NULL;
 }
 
+/* Deliberately doesn't include the "stats" cache entry (GET /api/v1/stats) -
+ * that RPC command's per-device payload is much larger than summary/devs/
+ * pools combined, and callers who need it (e.g. Fan/FanCeiling) can poll
+ * /api/v1/stats on demand instead of it doubling every /stream push. */
 json_t *statscache_get_envelope(bool *stale)
 {
 	json_t *envelope = json_object();
@@ -130,6 +137,7 @@ static void *poll_thread(void *arg)
 		entry_update(&summary_entry, "summary");
 		entry_update(&devs_entry, "devs");
 		entry_update(&pools_entry, "pools");
+		entry_update(&stats_entry, "stats");
 
 		if (update_cb) {
 			json_t *envelope = statscache_get_envelope(NULL);

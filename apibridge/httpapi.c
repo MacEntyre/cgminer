@@ -263,6 +263,12 @@ static int handler_pools(struct mg_connection *conn, void *cbdata)
 	return handle_stat(conn, "pools");
 }
 
+static int handler_stats(struct mg_connection *conn, void *cbdata)
+{
+	(void)cbdata;
+	return handle_stat(conn, "stats");
+}
+
 static int handler_health(struct mg_connection *conn, void *cbdata)
 {
 	bool stale;
@@ -293,6 +299,7 @@ void httpapi_register(struct mg_context *ctx)
 	mg_set_request_handler(ctx, "/api/v1/summary", handler_summary, NULL);
 	mg_set_request_handler(ctx, "/api/v1/devs", handler_devs, NULL);
 	mg_set_request_handler(ctx, "/api/v1/pools", handler_pools, NULL);
+	mg_set_request_handler(ctx, "/api/v1/stats", handler_stats, NULL);
 	mg_set_request_handler(ctx, "/api/v1/health", handler_health, NULL);
 	mg_set_request_handler(ctx, "/api/v1/control", handler_control, NULL);
 	mg_set_request_handler(ctx, "/api/v1/control/reset", handler_control_reset, NULL);

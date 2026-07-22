@@ -6,7 +6,7 @@ in CI (see .github/workflows/build.yml). Stdlib only, no dependencies.
 
 The fake server speaks just enough of cgminer's api.c protocol (one
 JSON request per connection, NUL-terminated JSON reply, then close) to
-serve canned "summary"/"devs"/"pools" responses.
+serve canned "summary"/"devs"/"pools"/"stats" responses.
 
 Usage:
     apibridge/tools/component-test.py [--apibridged PATH]
@@ -52,6 +52,23 @@ CANNED_REPLIES = {
             "Status": "Alive", "Stratum Active": True,
             "Work Difficulty": 1024, "Accepted": 10, "Rejected": 1,
         }],
+        "id": 1,
+    },
+    "stats": {
+        # cgminer's real "stats" STATS array mixes one entry per device
+        # with one entry per pool (see api.c's minerstats()) - mirror that
+        # shape here so apibridge-cli.py's device-vs-pool filtering has
+        # something real to filter.
+        "STATUS": [{"STATUS": "S", "Msg": "CGMiner stats"}],
+        "STATS": [
+            {
+                "STATS": 0, "ID": "GSA0", "Serial": "GS-10100119",
+                "Temp": 40.7, "CoremV": 270, "Fan": 6990.0, "FanCeiling": False,
+            },
+            {
+                "STATS": 1, "ID": "POOL0", "Pool Calls": 0, "Pool Attempts": 0,
+            },
+        ],
         "id": 1,
     },
 }
@@ -258,6 +275,16 @@ def run_readonly_and_control_disabled(apibridged_path, host, cgminer_port, liste
         check("GET /pools with token", status, 200)
         check("GET /pools URL field", data.get("pools", {}).get("POOLS", [{}])[0].get("URL"),
               "stratum+tcp://component-test.invalid:3333")
+
+        status, _ = http_get(f"{base}/stats")
+        check("GET /stats without token", status, 401)
+
+        status, data = http_get(f"{base}/stats", token=token)
+        check("GET /stats with token", status, 200)
+        stats_entries = data.get("stats", {}).get("STATS", [])
+        gsa0 = next((e for e in stats_entries if e.get("ID") == "GSA0"), {})
+        check("GET /stats Fan field", gsa0.get("Fan"), 6990.0)
+        check("GET /stats FanCeiling field", gsa0.get("FanCeiling"), False)
 
         # Mobile WebSocket clients can't always set custom headers on the
         # upgrade handshake, so auth also accepts a ?token= query param

@@ -23,6 +23,8 @@ Commands:
     summary                 GET /api/v1/summary
     devs                    GET /api/v1/devs
     pools                   GET /api/v1/pools
+    stats                   GET /api/v1/stats (per-device detail, including
+                            GekkoScience Fan/FanCeiling - see APIBRIDGE-README)
     stream [-n N]           Follow /api/v1/stream (Ctrl+C to stop; N frames then exit, default: unlimited)
     control                 POST /api/v1/control (or /api/v1/control/reset with --reset) -
                           requires cgminer to have been started with
@@ -230,6 +232,30 @@ def cmd_pools(args):
               f"accepted={p.get('Accepted')}  rejected={p.get('Rejected')}")
 
 
+def cmd_stats(args):
+    url = f"http://{args.host}:{args.port}/api/v1/stats"
+    status, data = http_get(url, require_token(args))
+    require_ok(status, data, url)
+    if args.json:
+        print(json.dumps(data, indent=2))
+        return
+    entries = data.get("stats", {}).get("STATS", [])
+    # the "stats" RPC command's STATS array also carries a POOL* entry per
+    # pool alongside one entry per device - only the device entries are
+    # interesting here (and only GSA1/GSA2 ones have Fan/FanCeiling at all).
+    devs = [e for e in entries if not str(e.get("ID", "")).startswith("POOL")]
+    print(f"stale: {data.get('stale')}  age: {data.get('age_s')}s  {len(devs)} device(s)")
+    print(f"{'ID':>6} {'Serial':<14} {'Temp':>7} {'CoremV':>7} {'Fan':>9} {'FanCeiling':>10}")
+    for d in devs:
+        fan = d.get("Fan")
+        fan_str = f"{fan:.0f}rpm" if fan is not None else "-"
+        ceiling = d.get("FanCeiling")
+        ceiling_str = str(ceiling) if ceiling is not None else "-"
+        print(f"{d.get('ID', ''):>6} {d.get('Serial', ''):<14} "
+              f"{d.get('Temp', 0):>6.1f}C {d.get('CoremV', 0):>7.0f} "
+              f"{fan_str:>9} {ceiling_str:>10}")
+
+
 def cmd_control(args):
     token = require_write_token(args)
 
@@ -315,7 +341,7 @@ def build_parser():
     sub = parser.add_subparsers(dest="command", required=True)
 
     for name, fn in (("health", cmd_health), ("summary", cmd_summary),
-                      ("devs", cmd_devs), ("pools", cmd_pools)):
+                      ("devs", cmd_devs), ("pools", cmd_pools), ("stats", cmd_stats)):
         p = sub.add_parser(name)
         p.add_argument("--json", action="store_true")
         p.set_defaults(func=fn)
