@@ -143,16 +143,41 @@ if [ "$TEST_CONTROL" = "1" ]; then
 		check "POST /control with read-only token is rejected" "$code" "401"
 
 		note "setfan round-trip (verifies Fan RPM actually changes through apibridge)"
+		# The GSA1/GSA2 driver sometimes logs a transient "found 0 chip(s)"
+		# on first init and self-recovers a few seconds later (observed on
+		# real A2 hardware) - the apibridge token appearing only means
+		# apibridge itself is up, not that chip/telemetry init has finished,
+		# so wait for stats' Chips>0 before judging setfan support, the same
+		# way this script already waits for WRITE_TOKEN_FILE above.
+		for _ in $(seq 1 15); do
+			chips=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/stats \
+				| python3 -c 'import json,sys
+d = json.load(sys.stdin)
+devs = [e for e in d.get("stats", {}).get("STATS", []) if str(e.get("ID", "")).startswith("GSA")]
+print(devs[0].get("Chips", 0) if devs else 0)' 2>/dev/null)
+			[ "${chips:-0}" -gt 0 ] 2>/dev/null && break
+			sleep 1
+		done
+
 		setfan_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
 			-H "Authorization: Bearer $WRITE_TOKEN" -H "Content-Type: application/json" \
 			-d '{"asc_id":0,"option":"setfan","value":50}' http://127.0.0.1:4029/api/v1/control)
 		if [ "$setfan_code" = "200" ]; then
-			sleep 3
-			fan_after=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/stats \
-				| python3 -c 'import json,sys
+			# the PWM command reaches the MCU on the driver's next telemetry
+			# poll cycle (not instantly), and the physical fan then needs a
+			# moment to actually spin up before the tach reading reflects
+			# it - poll instead of a single fixed sleep, since a fan coming
+			# from a cold/near-0 start can take a few seconds.
+			fan_after=0
+			for _ in $(seq 1 10); do
+				fan_after=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/stats \
+					| python3 -c 'import json,sys
 d = json.load(sys.stdin)
 devs = [e for e in d.get("stats", {}).get("STATS", []) if str(e.get("ID", "")).startswith("GSA")]
 print(devs[0].get("Fan", "") if devs else "")')
+				python3 -c "import sys; sys.exit(0 if float('$fan_after' or 0) > 0 else 1)" 2>/dev/null && break
+				sleep 1
+			done
 			if python3 -c "import sys; sys.exit(0 if float('$fan_after' or 0) > 0 else 1)" 2>/dev/null; then
 				echo "OK   POST /control setfan changed Fan RPM (now ${fan_after}rpm)"
 			else
