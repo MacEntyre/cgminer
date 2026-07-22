@@ -95,6 +95,21 @@ static void test_telem_totach(void)
 	CHECK("totach(154) matches live-hardware setfan~50% reading", telem_totach(154), 4620);
 }
 
+static void test_telem_tach_saturated(void)
+{
+	/* Hardware-observed: setfan 90% saturates the byte at 255 -> exactly
+	 * 7650rpm; that's the only value this can reliably flag (see the
+	 * doc comment on telem_tach_saturated() - lower wrapped bytes, like
+	 * the 270/630rpm seen at setfan 95%/100% on the same hardware, are
+	 * indistinguishable from genuine low readings). */
+	CHECK("just under the ceiling is not saturated", telem_tach_saturated(7649.9f), false);
+	CHECK("exactly at the ceiling is saturated", telem_tach_saturated(7650.0f), true);
+	CHECK("totach(255) itself reports saturated", telem_tach_saturated(telem_totach(255)), true);
+	CHECK("totach(254) (just under ceiling) is not saturated", telem_tach_saturated(telem_totach(254)), false);
+	CHECK("a low, wrapped-looking reading is NOT flagged (known limitation)",
+	      telem_tach_saturated(telem_totach(9)), false);
+}
+
 int main(void)
 {
 	test_telem_tovin();
@@ -104,6 +119,7 @@ int main(void)
 	test_corev_totelem();
 	test_telem_toiinout();
 	test_telem_totach();
+	test_telem_tach_saturated();
 
 	TEST_EXIT();
 }

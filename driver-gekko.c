@@ -6711,7 +6711,8 @@ static void compac_statline(char *buf, size_t bufsiz, struct cgpu_info *compac)
 			}
 			else if (opt_widescreen)
 			{
-				snprintf(fan0, sizeof(fan0), "FAN:%.0frpm ", info->telem_tach);
+				snprintf(fan0, sizeof(fan0), "FAN:%.0frpm%s ", info->telem_tach,
+					telem_tach_saturated(info->telem_tach) ? "+" : "");
 			}
 		}
 		else if (TELEM_IS_V3(info))
@@ -6727,7 +6728,8 @@ static void compac_statline(char *buf, size_t bufsiz, struct cgpu_info *compac)
 				}
 				else if (opt_widescreen)
 				{
-					snprintf(fan0, sizeof(fan0), "FAN:%.0frpm ", info->telem_tach);
+					snprintf(fan0, sizeof(fan0), "FAN:%.0frpm%s ", info->telem_tach,
+						telem_tach_saturated(info->telem_tach) ? "+" : "");
 				}
 			}
 		}
@@ -7074,6 +7076,10 @@ static struct api_data *compac_api_stats(struct cgpu_info *compac)
 		root = api_add_float(root, "Temp", &info->telem_temp, false);
 		root = api_add_float(root, "Temp2", &info->telem_temp2, false);
 		root = api_add_float(root, "Fan", &info->telem_tach, false);
+		{
+			bool fan_ceiling = telem_tach_saturated(info->telem_tach);
+			root = api_add_bool(root, "FanCeiling", &fan_ceiling, true);
+		}
 		root = api_add_float(root, "LastTemp", &info->telem_temp_last, false);
 		root = api_add_float(root, "MaxTemp", &info->telem_temp_max, false);
 		root = api_add_timeval(root, "MaxTempTime", &info->temp_maxt, false);
