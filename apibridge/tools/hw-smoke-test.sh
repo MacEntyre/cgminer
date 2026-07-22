@@ -24,6 +24,14 @@
 # left as an opt-in env var rather than a positional arg so the common case
 # (just check the REST/WebSocket surface) stays a one-line invocation.
 #
+# Also relays a real "setfan" (50%) and confirms /api/v1/stats' Fan RPM
+# actually changes through apibridge itself (not just raw cgminer RPC) -
+# unlike zeromaxt this briefly changes fan speed, so it always restores
+# setfan to 100 (the driver's own boot default) afterwards. Only applies to
+# GSA1/GSA2 with V2/V3 telemetry - on any other device/telemetry version
+# the driver rejects it (HTTP 422), which this script treats as SKIP, not
+# FAIL, since it's plugged-in-hardware dependent rather than a bug.
+#
 # See CLAUDE.md's "Device Identity -> ASIC Mapping" table for the detect
 # flag matching your hardware.
 
@@ -133,6 +141,33 @@ if [ "$TEST_CONTROL" = "1" ]; then
 			-H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
 			-d '{"asc_id":0,"option":"zeromaxt"}' http://127.0.0.1:4029/api/v1/control)
 		check "POST /control with read-only token is rejected" "$code" "401"
+
+		note "setfan round-trip (verifies Fan RPM actually changes through apibridge)"
+		setfan_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+			-H "Authorization: Bearer $WRITE_TOKEN" -H "Content-Type: application/json" \
+			-d '{"asc_id":0,"option":"setfan","value":50}' http://127.0.0.1:4029/api/v1/control)
+		if [ "$setfan_code" = "200" ]; then
+			sleep 3
+			fan_after=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/stats \
+				| python3 -c 'import json,sys
+d = json.load(sys.stdin)
+devs = [e for e in d.get("stats", {}).get("STATS", []) if str(e.get("ID", "")).startswith("GSA")]
+print(devs[0].get("Fan", "") if devs else "")')
+			if python3 -c "import sys; sys.exit(0 if float('$fan_after' or 0) > 0 else 1)" 2>/dev/null; then
+				echo "OK   POST /control setfan changed Fan RPM (now ${fan_after}rpm)"
+			else
+				echo "FAIL POST /control setfan accepted (200) but Fan RPM did not change (got '$fan_after')"
+				fail=1
+			fi
+
+			# restore the driver's own boot default rather than leaving the
+			# fan at the 50% test value
+			curl -s -o /dev/null -X POST \
+				-H "Authorization: Bearer $WRITE_TOKEN" -H "Content-Type: application/json" \
+				-d '{"asc_id":0,"option":"setfan","value":100}' http://127.0.0.1:4029/api/v1/control
+		else
+			echo "SKIP POST /control setfan (HTTP $setfan_code - device doesn't support setfan, e.g. not GSA1/2 V2/V3)"
+		fi
 	fi
 fi
 

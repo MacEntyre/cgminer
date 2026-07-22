@@ -143,7 +143,7 @@ Whitelisted options for POST /api/v1/control:
   target      <0-800/1200>   Set the auto-tuning target frequency
   corev       <0-500>        Set core voltage (GSA1/GSA2 - Compac A2 /
                               Terminus A2 - only; harmless no-op elsewhere)
-  setfan      <0-100>        Set fan speed % (GSA1/GSA2 V2.1/V3 only)
+  setfan      <0-100>        Set fan speed % (GSA1/GSA2 V2/V3 only)
   lockfreq    (no value)     Freeze auto-tuning
   unlockfreq  (no value)     Resume auto-tuning
   zeromaxt    (no value)     Clear the overtemperature-cooldown latch so a
