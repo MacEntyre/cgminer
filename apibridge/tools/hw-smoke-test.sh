@@ -80,11 +80,18 @@ check "GET /devs" "$code" "200"
 code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/pools)
 check "GET /pools" "$code" "200"
 
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/stats)
+check "GET /stats" "$code" "200"
+
 code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4029/api/v1/summary)
 check "GET /summary without token is rejected" "$code" "401"
 
 note "devs payload (spot-check real device fields)"
 curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/devs
+
+note "stats payload (spot-check Fan/FanCeiling on GSA1/GSA2 devices)"
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/stats \
+	| python3 -c 'import json,sys; d=json.load(sys.stdin); print([e for e in d.get("stats",{}).get("STATS",[]) if str(e.get("ID","")).startswith("GSA")])'
 
 note "WebSocket /stream (3 live frames)"
 python3 "$(dirname "$0")/ws_probe.py" 127.0.0.1 4029 "$TOKEN" 3 | grep -c '"type":"stats"' \

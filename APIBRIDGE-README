@@ -75,6 +75,17 @@ only cgminer's own RPC API (ascset, see API-README) can do that.
   GET /api/v1/summary   Same data as the RPC "summary" command
   GET /api/v1/devs      Same data as the RPC "devs" command
   GET /api/v1/pools     Same data as the RPC "pools" command
+  GET /api/v1/stats     Same data as the RPC "stats" command - per-device
+                        detail, including GekkoScience-specific fields such
+                        as "Fan" (GSA1/GSA2 fan RPM, from the device's
+                        single-byte tach reading) and "FanCeiling" (true
+                        once "Fan" hits 7650rpm, the byte encoding's
+                        representable ceiling - the true RPM may be higher
+                        and the reading wrapped; there is no way to tell
+                        from a single byte, so treat "Fan" as "at or above
+                        7650" rather than exact once "FanCeiling" is true).
+                        Not included in the /stream envelope since it is
+                        much larger per device than summary/devs/pools
   GET /api/v1/health    Bridge + cgminer reachability status, no auth
                         required (used for connection-status UI)
   GET /api/v1/stream    WebSocket upgrade; pushes a combined
