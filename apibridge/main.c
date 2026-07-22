@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -34,17 +35,29 @@
 
 struct apibridge_config g_config;
 
+/* apibridge's stderr is inherited straight from cgminer (see
+ * cgminer-apibridge.c) and interleaves with cgminer's own applog() lines in
+ * the same terminal/log stream, so the timestamp format here matches
+ * cgminer's get_datestamp() (cgminer.c) - including millisecond precision -
+ * rather than drifting into a visibly different style. */
 void bridge_log(const char *fmt, ...)
 {
-	time_t now = time(NULL);
+	struct timeval now;
 	struct tm tm_now;
 	char timebuf[32];
 	va_list ap;
 
-	localtime_r(&now, &tm_now);
-	strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S", &tm_now);
+	gettimeofday(&now, NULL);
+	localtime_r(&now.tv_sec, &tm_now);
+	snprintf(timebuf, sizeof(timebuf), "%04d-%02d-%02d %02d:%02d:%02d.%03d",
+		 tm_now.tm_year + 1900, tm_now.tm_mon + 1, tm_now.tm_mday,
+		 tm_now.tm_hour, tm_now.tm_min, tm_now.tm_sec,
+		 (int)(now.tv_usec / 1000));
 
-	fprintf(stderr, "[%s] apibridge: ", timebuf);
+	/* cgminer's own applog() (logging.c) leads with a space before the
+	 * bracket; match it so apibridge's lines don't sit one column left
+	 * of cgminer's in the interleaved stderr stream. */
+	fprintf(stderr, " [%s] apibridge: ", timebuf);
 	va_start(ap, fmt);
 	vfprintf(stderr, fmt, ap);
 	va_end(ap);
