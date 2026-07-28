@@ -16,10 +16,11 @@ void statscache_start(void);
 void statscache_stop(void);
 
 /* Returns a new reference to the last-known-good response for "summary",
- * "devs" or "pools" (the raw cgminer JSON, STATUS wrapper included), or NULL
- * if never successfully polled yet. *stale is set true if cgminer was
- * unreachable on the most recent poll (the returned data, if any, is then
- * the last-known-good snapshot, not fresh). */
+ * "devs", "pools", "stats", "version", "config", "coin" or "notify" (the
+ * raw cgminer JSON, STATUS wrapper included), or NULL if never successfully
+ * polled yet. *stale is set true if cgminer was unreachable on the most
+ * recent poll (the returned data, if any, is then the last-known-good
+ * snapshot, not fresh). */
 json_t *statscache_get(const char *key, bool *stale, double *age_s);
 
 /* Combined {"type":"stats","summary":...,"devs":...,"pools":...,"stale":...,

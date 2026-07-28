@@ -76,6 +76,40 @@ CANNED_REPLIES = {
         ],
         "id": 1,
     },
+    "version": {
+        "STATUS": [{"STATUS": "S", "Msg": "CGMiner versions"}],
+        "VERSION": [{"CGMiner": "4.13.6", "API": "3.7"}],
+        "id": 1,
+    },
+    "config": {
+        "STATUS": [{"STATUS": "S", "Msg": "CGMiner config"}],
+        "CONFIG": [{
+            "ASC Count": 1, "PGA Count": 0, "Pool Count": 1,
+            "Strategy": "Failover", "Log Interval": 5,
+            "Device Code": "GSK GSA GSF GSH GSI ", "OS": "Linux", "Hotplug": "5",
+        }],
+        "id": 1,
+    },
+    "coin": {
+        "STATUS": [{"STATUS": "S", "Msg": "CGMiner coin"}],
+        "COIN": [{
+            "Hash Method": "SHA256", "Current Block Time": 1234567890.123456,
+            "Current Block Hash": "0" * 64, "LP": True, "Network Difficulty": 90666502495566.98,
+        }],
+        "id": 1,
+    },
+    "notify": {
+        "STATUS": [{"STATUS": "S", "Msg": "Notify"}],
+        "NOTIFY": [{
+            "NOTIFY": 0, "Name": "GSF", "ID": 0,
+            "Last Well": 1234567890, "Last Not Well": 0, "Reason Not Well": "None",
+            "*Thread Fail Init": 0, "*Thread Zero Hash": 0, "*Thread Fail Queue": 0,
+            "*Dev Sick Idle 60s": 0, "*Dev Dead Idle 600s": 0, "*Dev Nostart": 0,
+            "*Dev Over Heat": 0, "*Dev Thermal Cutoff": 0, "*Dev Comms Error": 0,
+            "*Dev Throttle": 0,
+        }],
+        "id": 1,
+    },
 }
 
 fail = 0
@@ -106,6 +140,7 @@ class FakeCgminer:
 
     KNOWN_ASCSET_OPTIONS = {
         "freq", "target", "corev", "setfan", "lockfreq", "unlockfreq", "zeromaxt", "reset",
+        "chip", "waitfactor", "usbprop", "require",
     }
 
     def __init__(self, host, port):
@@ -133,6 +168,16 @@ class FakeCgminer:
             return _access_denied("privileged")
         return {"STATUS": [{"STATUS": "S", "Msg": "Privileged access OK"}], "id": 1}
 
+    def _handle_asc_enable_disable(self, command, parameter):
+        """Mirrors api.c's ascenable()/ascdisable(): success (and the
+        already-enabled/already-disabled case) is reported as STATUS "I",
+        not "S" - see control.h:control_enable_status_to_http()."""
+        if not self.privileged_allowed:
+            return _access_denied(command)
+        asc_id = parameter or "0"
+        verb = "sent enable message" if command == "ascenable" else "set disable flag"
+        return {"STATUS": [{"STATUS": "I", "Msg": f"ASC {asc_id} {verb}"}], "id": 1}
+
     def _serve(self):
         while not self.stop_event.is_set():
             try:
@@ -147,6 +192,8 @@ class FakeCgminer:
                     reply = self._handle_ascset(req.get("parameter"))
                 elif command == "privileged":
                     reply = self._handle_privileged()
+                elif command in ("ascenable", "ascdisable"):
+                    reply = self._handle_asc_enable_disable(command, req.get("parameter"))
                 else:
                     reply = CANNED_REPLIES.get(
                         command,
@@ -330,6 +377,33 @@ def run_readonly_and_control_disabled(apibridged_path, host, cgminer_port, liste
         check("GET /stats Fan field", gsa0.get("Fan"), 6990.0)
         check("GET /stats FanCeiling field", gsa0.get("FanCeiling"), False)
 
+        status, _ = http_get(f"{base}/version")
+        check("GET /version without token", status, 401)
+
+        status, data = http_get(f"{base}/version", token=token)
+        check("GET /version with token", status, 200)
+        check("GET /version CGMiner field", data.get("version", {}).get("VERSION", [{}])[0].get("CGMiner"),
+              "4.13.6")
+
+        status, data = http_get(f"{base}/config", token=token)
+        check("GET /config with token", status, 200)
+        check("GET /config ASC Count field", data.get("config", {}).get("CONFIG", [{}])[0].get("ASC Count"), 1)
+
+        status, data = http_get(f"{base}/coin", token=token)
+        check("GET /coin with token", status, 200)
+        check("GET /coin Network Difficulty field",
+              data.get("coin", {}).get("COIN", [{}])[0].get("Network Difficulty"), 90666502495566.98)
+
+        status, data = http_get(f"{base}/notify", token=token)
+        check("GET /notify with token", status, 200)
+        check("GET /notify Name field", data.get("notify", {}).get("NOTIFY", [{}])[0].get("Name"), "GSF")
+
+        status, _ = http_post(f"{base}/control/enable", {"asc_id": 0})
+        check("POST /control/enable without write token configured", status, 501)
+
+        status, _ = http_post(f"{base}/control/disable", {"asc_id": 0})
+        check("POST /control/disable without write token configured", status, 501)
+
         # Mobile WebSocket clients can't always set custom headers on the
         # upgrade handshake, so auth also accepts a ?token= query param
         # (see apibridge/auth.c) - cover that fallback here too.
@@ -388,6 +462,25 @@ def run_control_enabled(apibridged_path, host, cgminer_port, listen_port, token,
         status, data = http_post(f"{base}/control/reset", {"asc_id": 0}, token=write_token)
         check("POST /control/reset with write token", status, 200)
 
+        status, data = http_post(f"{base}/control",
+                                  {"asc_id": 0, "option": "chip", "chip_index": 3, "value": 650},
+                                  token=write_token)
+        check("POST /control chip with chip_index and value", status, 200)
+
+        status, _ = http_post(f"{base}/control", {"asc_id": 0, "option": "chip", "value": 650},
+                               token=write_token)
+        check("POST /control chip without chip_index rejected", status, 400)
+
+        # ascenable/ascdisable report success as STATUS "I", not "S" - this
+        # exercises apibridge's control_enable_status_to_http() end to end
+        # against the fake cgminer's matching "I" reply (see
+        # FakeCgminer._handle_asc_enable_disable()).
+        status, data = http_post(f"{base}/control/enable", {"asc_id": 0}, token=write_token)
+        check("POST /control/enable with write token (STATUS I -> 200)", status, 200)
+
+        status, data = http_post(f"{base}/control/disable", {"asc_id": 0}, token=write_token)
+        check("POST /control/disable with write token (STATUS I -> 200)", status, 200)
+
         return True
     finally:
         stop_apibridged(proc, "apibridged (control-enabled run)")
@@ -413,6 +506,9 @@ def run_control_available_false(apibridged_path, host, cgminer_port, listen_port
         status, data = http_post(f"{base}/control", {"asc_id": 0, "option": "freq", "value": 650},
                                   token=write_token)
         check("POST /control passes through cgminer's Access denied", status, 403)
+
+        status, _ = http_post(f"{base}/control/enable", {"asc_id": 0}, token=write_token)
+        check("POST /control/enable passes through cgminer's Access denied", status, 403)
 
         return True
     finally:

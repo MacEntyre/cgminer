@@ -38,6 +38,21 @@ json_t *control_relay_ascset(int asc_id, const char *option, bool value_present,
  * /api/v1/control/reset). */
 json_t *control_relay_reset(int asc_id);
 
+/* "chip" is the one whitelisted ascset option whose setting is a compound
+ * value - driver-gekko.c expects "<chip_index>:<freq>", not a bare number
+ * (see compac_api_set()'s "chip" branch) - so it can't go through
+ * control_relay_ascset()'s single-value shape. Builds
+ * "<asc_id>,chip,<chip_index>:<value>" and relays it the same way. */
+bool control_build_parameter_chip(char *out, size_t out_siz, int asc_id, int chip_index, double value);
+json_t *control_relay_ascset_chip(int asc_id, int chip_index, double value);
+
+/* Relays "ascenable"/"ascdisable" for asc_id. Unlike ascset, these commands
+ * take a bare "<asc_id>" wire parameter (api.c: ascenable()/ascdisable()),
+ * not "<asc_id>,<option>[,<value>]" - so they don't go through
+ * control_build_parameter()/control_relay_ascset() either. */
+json_t *control_relay_ascenable(int asc_id);
+json_t *control_relay_ascdisable(int asc_id);
+
 /* Calls cgminer's "privileged" RPC command, which does nothing but confirm
  * the caller's connection is in cgminer's PRIVGROUP ACL (api.c). Used once
  * at apibridge startup to populate "control_available" on
@@ -61,4 +76,15 @@ bool control_is_available(void);
  * into resp's own strings and is only valid as long as resp is alive. */
 int control_status_to_http(json_t *resp, const char **msg_out);
 
+/* Same mapping as control_status_to_http(), except cgminer's own STATUS
+ * "I" (informational) also counts as success (200), not just "S". Use this
+ * for /api/v1/control/enable and /disable only: api.c's ascenable()/
+ * ascdisable() report their success case (and the "already enabled"/
+ * "already disabled" case) as SEVERITY_INFO -> "I", unlike ascset's
+ * SEVERITY_SUCC -> "S" (see MSG_ASCENA/MSG_ASCDIS vs MSG_ASCSETOK in
+ * api.c's message table) - control_status_to_http() itself is left
+ * untouched since it's already hw-verified for ascset/reset. */
+int control_enable_status_to_http(json_t *resp, const char **msg_out);
+
 #endif /* __APIBRIDGE_CONTROL_H__ */
+

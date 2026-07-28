@@ -98,6 +98,15 @@ PHASE 1: READ-ONLY MONITORING
                         7650" rather than exact once "FanCeiling" is true).
                         Not included in the /stream envelope since it is
                         much larger per device than summary/devs/pools
+  GET /api/v1/version   Same data as the RPC "version" command - cgminer +
+                        API version strings
+  GET /api/v1/config    Same data as the RPC "config" command - device
+                        counts, pool strategy, hotplug interval
+  GET /api/v1/coin      Same data as the RPC "coin" command - current
+                        block time/hash and network difficulty
+  GET /api/v1/notify    Same data as the RPC "notify" command - per-device
+                        health/warning history (last well/not well
+                        timestamps, reason, cumulative failure counters)
   GET /api/v1/health    Bridge + cgminer reachability status, no auth
                         required (used for connection-status UI)
   GET /api/v1/stream    WebSocket upgrade; pushes a combined
@@ -118,10 +127,11 @@ something to show instead of a blank screen.
 PHASE 2: CONTROL ENDPOINTS
 
 Phase 2 relays a whitelisted subset of cgminer's own ascset RPC command
-(see API-README) - it does not reimplement any of ascset's validation.
-Every value driver-gekko.c already clamps (frequency ranges, voltage
-limits, ...) is still clamped by driver-gekko.c; apibridge only decides
-which option *names* it's willing to forward at all.
+(see API-README), plus the ascenable/ascdisable device on/off commands -
+it does not reimplement any of their validation. Every value
+driver-gekko.c already clamps (frequency ranges, voltage limits, ...) is
+still clamped by driver-gekko.c; apibridge only decides which option
+*names* it's willing to forward at all.
 
 Enable with --api-bridge-control (see RUNNING above). This also requires
 cgminer to be started with --api-allow granting write access to
@@ -139,14 +149,28 @@ reports the result as "control_available" on /api/v1/health, so a
 dashboard can grey out controls with a clear reason instead of every
 request silently failing.
 
-  POST /api/v1/control        Body: {"asc_id":0,"option":"freq","value":650}
+  POST /api/v1/control         Body: {"asc_id":0,"option":"freq","value":650}
                                "value" is omitted for lockfreq/unlockfreq/
                                zeromaxt. "asc_id" is the same ASC index as
-                               in the "devs" response.
-  POST /api/v1/control/reset  Body: {"asc_id":0} - device reinit, kept as
+                               in the "devs" response. "chip" additionally
+                               requires "chip_index" (see below).
+  POST /api/v1/control/reset   Body: {"asc_id":0} - device reinit, kept as
                                its own endpoint (not reachable through the
                                generic "option" field) since it's more
                                disruptive than the other options.
+  POST /api/v1/control/enable  Body: {"asc_id":0} - enable a disabled
+                               device (RPC "ascenable").
+  POST /api/v1/control/disable Body: {"asc_id":0} - disable an enabled
+                               device (RPC "ascdisable"). Kept as their own
+                               endpoints since ascenable/ascdisable take a
+                               bare device id as their wire parameter, not
+                               the "id,option[,value]" shape the other
+                               control routes use. cgminer reports success
+                               for these two (including the already-
+                               enabled/already-disabled case) as STATUS
+                               "I", not "S" like the other control
+                               commands - apibridge treats "S" or "I" as
+                               200 for these two routes specifically.
 
 Whitelisted options for POST /api/v1/control:
 
@@ -161,6 +185,16 @@ Whitelisted options for POST /api/v1/control:
                               GSA1/GSA2 device resumes at full frequency
                               instead of staying throttled (GSA1/GSA2 only;
                               harmless no-op elsewhere)
+  chip        <0-800>        Set one chip's frequency (BM1397 - CompacF/
+                              R909 - only). Requires "chip_index" (the
+                              chip number) alongside "value" (the
+                              frequency), e.g. {"asc_id":0,"option":"chip",
+                              "chip_index":3,"value":650}
+  waitfactor  <0.01-2.0>     Tune the inter-task wait-time multiplier
+  usbprop     <uslp_min-1000> Tune USB work-propagation time, in
+                              microseconds (BM1397 only)
+  require     <0.0-0.8>      Set the minimum acceptable hashrate ratio
+                              ("ghrequire") before the tuning loop reacts
 
 These endpoints require a second, write-scoped bearer token - separate
 from the read-only token above, and only generated/handed to apibridge
@@ -202,10 +236,13 @@ real hardware:
     `./configure --enable-apibridge`.
   - component test: apibridge/tools/component-test.py starts apibridged
     against a fake, stdlib-only stand-in for cgminer's RPC API and drives
-    /health, /summary, /devs, /pools (with and without the bearer token,
-    including the ?token= fallback), the Phase 2 control routes (control
-    disabled -> 501; enabled with cgminer's ACL granting write access ->
-    200/400 whitelist rejection/401 wrong or read-only token; enabled with
+    /health, /summary, /devs, /pools, /stats, /version, /config, /coin,
+    /notify (with and without the bearer token, including the ?token=
+    fallback), the Phase 2 control routes - /control (including the "chip"
+    option's chip_index requirement), /control/reset, /control/enable,
+    /control/disable (control disabled -> 501; enabled with cgminer's ACL
+    granting write access -> 200/400 whitelist rejection/401 wrong or
+    read-only token/200 for enable+disable's STATUS "I" case; enabled with
     cgminer's ACL denying write access -> control_available:false and a
     403 passthrough), plus a clean SIGTERM shutdown. Run locally with
     `apibridge/tools/component-test.py` once cgminer and apibridged are

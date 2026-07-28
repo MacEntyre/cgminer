@@ -27,6 +27,10 @@ static struct cache_entry summary_entry = { PTHREAD_MUTEX_INITIALIZER, NULL, tru
 static struct cache_entry devs_entry    = { PTHREAD_MUTEX_INITIALIZER, NULL, true, 0 };
 static struct cache_entry pools_entry   = { PTHREAD_MUTEX_INITIALIZER, NULL, true, 0 };
 static struct cache_entry stats_entry   = { PTHREAD_MUTEX_INITIALIZER, NULL, true, 0 };
+static struct cache_entry version_entry = { PTHREAD_MUTEX_INITIALIZER, NULL, true, 0 };
+static struct cache_entry config_entry  = { PTHREAD_MUTEX_INITIALIZER, NULL, true, 0 };
+static struct cache_entry coin_entry    = { PTHREAD_MUTEX_INITIALIZER, NULL, true, 0 };
+static struct cache_entry notify_entry  = { PTHREAD_MUTEX_INITIALIZER, NULL, true, 0 };
 
 static pthread_t poll_thread_id;
 static volatile bool poll_running;
@@ -84,6 +88,14 @@ json_t *statscache_get(const char *key, bool *stale, double *age_s)
 		return entry_get(&pools_entry, stale, age_s);
 	if (!strcmp(key, "stats"))
 		return entry_get(&stats_entry, stale, age_s);
+	if (!strcmp(key, "version"))
+		return entry_get(&version_entry, stale, age_s);
+	if (!strcmp(key, "config"))
+		return entry_get(&config_entry, stale, age_s);
+	if (!strcmp(key, "coin"))
+		return entry_get(&coin_entry, stale, age_s);
+	if (!strcmp(key, "notify"))
+		return entry_get(&notify_entry, stale, age_s);
 	return NULL;
 }
 
@@ -138,6 +150,10 @@ static void *poll_thread(void *arg)
 		entry_update(&devs_entry, "devs");
 		entry_update(&pools_entry, "pools");
 		entry_update(&stats_entry, "stats");
+		entry_update(&version_entry, "version");
+		entry_update(&config_entry, "config");
+		entry_update(&coin_entry, "coin");
+		entry_update(&notify_entry, "notify");
 
 		if (update_cb) {
 			json_t *envelope = statscache_get_envelope(NULL);

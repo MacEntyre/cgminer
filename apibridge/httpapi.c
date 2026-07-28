@@ -171,11 +171,16 @@ static bool get_asc_id(json_t *req, int *asc_id_out)
 	return *asc_id_out >= 0;
 }
 
-/* Relays resp (transferring ownership) to the client per
- * control_status_to_http(), audit-logs the outcome, and returns the HTTP
- * status used. resp may be NULL (cgminer unreachable / bad response). */
-static int relay_control_response(struct mg_connection *conn, json_t *resp, const char *remote,
-				   int asc_id, const char *option, const char *value_desc)
+typedef int (*status_mapper_fn)(json_t *, const char **);
+
+/* Relays resp (transferring ownership) to the client per mapper (either
+ * control_status_to_http() or control_enable_status_to_http() - see
+ * control.h for why enable/disable need the latter), audit-logs the
+ * outcome, and returns the HTTP status used. resp may be NULL (cgminer
+ * unreachable / bad response). */
+static int relay_control_response_ex(struct mg_connection *conn, json_t *resp, const char *remote,
+				      int asc_id, const char *option, const char *value_desc,
+				      status_mapper_fn mapper)
 {
 	const char *msg = NULL;
 	int code;
@@ -187,7 +192,7 @@ static int relay_control_response(struct mg_connection *conn, json_t *resp, cons
 		return send_error(conn, 502, "cgminer unreachable");
 	}
 
-	code = control_status_to_http(resp, &msg);
+	code = mapper(resp, &msg);
 
 	out = json_object();
 	json_object_set_new(out, "message", msg ? json_string(msg) : json_null());
@@ -201,10 +206,17 @@ static int relay_control_response(struct mg_connection *conn, json_t *resp, cons
 	return code;
 }
 
+static int relay_control_response(struct mg_connection *conn, json_t *resp, const char *remote,
+				   int asc_id, const char *option, const char *value_desc)
+{
+	return relay_control_response_ex(conn, resp, remote, asc_id, option, value_desc,
+					  control_status_to_http);
+}
+
 static int do_control(struct mg_connection *conn, json_t *req, const char *remote)
 {
 	int asc_id;
-	json_t *opt_v, *val_v;
+	json_t *opt_v, *val_v, *chip_v;
 	const char *option;
 	bool needs_value, value_present = false;
 	double value = 0;
@@ -233,6 +245,21 @@ static int do_control(struct mg_connection *conn, json_t *req, const char *remot
 		snprintf(value_desc, sizeof(value_desc), "%g", value);
 	}
 
+	/* "chip" is the one whitelisted option with a compound wire value
+	 * (chip index + frequency) - see control.h:control_relay_ascset_chip(). */
+	if (!strcasecmp(option_buf, "chip")) {
+		int chip_index;
+
+		chip_v = json_object_get(req, "chip_index");
+		if (!json_is_integer(chip_v) || json_integer_value(chip_v) < 0)
+			return send_error(conn, 400, "missing/invalid chip_index");
+		chip_index = (int)json_integer_value(chip_v);
+		snprintf(value_desc, sizeof(value_desc), "%d:%g", chip_index, value);
+
+		resp = control_relay_ascset_chip(asc_id, chip_index, value);
+		return relay_control_response(conn, resp, remote, asc_id, option_buf, value_desc);
+	}
+
 	resp = control_relay_ascset(asc_id, option_buf, value_present, value);
 	return relay_control_response(conn, resp, remote, asc_id, option_buf, value_desc);
 }
@@ -249,6 +276,32 @@ static int do_control_reset(struct mg_connection *conn, json_t *req, const char 
 	return relay_control_response(conn, resp, remote, asc_id, "reset", "-");
 }
 
+static int do_control_enable(struct mg_connection *conn, json_t *req, const char *remote)
+{
+	int asc_id;
+	json_t *resp;
+
+	if (!get_asc_id(req, &asc_id))
+		return send_error(conn, 400, "missing/invalid asc_id");
+
+	resp = control_relay_ascenable(asc_id);
+	return relay_control_response_ex(conn, resp, remote, asc_id, "ascenable", "-",
+					  control_enable_status_to_http);
+}
+
+static int do_control_disable(struct mg_connection *conn, json_t *req, const char *remote)
+{
+	int asc_id;
+	json_t *resp;
+
+	if (!get_asc_id(req, &asc_id))
+		return send_error(conn, 400, "missing/invalid asc_id");
+
+	resp = control_relay_ascdisable(asc_id);
+	return relay_control_response_ex(conn, resp, remote, asc_id, "ascdisable", "-",
+					  control_enable_status_to_http);
+}
+
 static int handler_control(struct mg_connection *conn, void *cbdata)
 {
 	(void)cbdata;
@@ -259,6 +312,18 @@ static int handler_control_reset(struct mg_connection *conn, void *cbdata)
 {
 	(void)cbdata;
 	return handle_control_request(conn, do_control_reset);
+}
+
+static int handler_control_enable(struct mg_connection *conn, void *cbdata)
+{
+	(void)cbdata;
+	return handle_control_request(conn, do_control_enable);
+}
+
+static int handler_control_disable(struct mg_connection *conn, void *cbdata)
+{
+	(void)cbdata;
+	return handle_control_request(conn, do_control_disable);
 }
 
 static int handle_stat(struct mg_connection *conn, const char *key)
@@ -312,6 +377,30 @@ static int handler_stats(struct mg_connection *conn, void *cbdata)
 	return handle_stat(conn, "stats");
 }
 
+static int handler_version(struct mg_connection *conn, void *cbdata)
+{
+	(void)cbdata;
+	return handle_stat(conn, "version");
+}
+
+static int handler_config(struct mg_connection *conn, void *cbdata)
+{
+	(void)cbdata;
+	return handle_stat(conn, "config");
+}
+
+static int handler_coin(struct mg_connection *conn, void *cbdata)
+{
+	(void)cbdata;
+	return handle_stat(conn, "coin");
+}
+
+static int handler_notify(struct mg_connection *conn, void *cbdata)
+{
+	(void)cbdata;
+	return handle_stat(conn, "notify");
+}
+
 static int handler_health(struct mg_connection *conn, void *cbdata)
 {
 	bool stale;
@@ -343,9 +432,15 @@ void httpapi_register(struct mg_context *ctx)
 	mg_set_request_handler(ctx, "/api/v1/devs", handler_devs, NULL);
 	mg_set_request_handler(ctx, "/api/v1/pools", handler_pools, NULL);
 	mg_set_request_handler(ctx, "/api/v1/stats", handler_stats, NULL);
+	mg_set_request_handler(ctx, "/api/v1/version", handler_version, NULL);
+	mg_set_request_handler(ctx, "/api/v1/config", handler_config, NULL);
+	mg_set_request_handler(ctx, "/api/v1/coin", handler_coin, NULL);
+	mg_set_request_handler(ctx, "/api/v1/notify", handler_notify, NULL);
 	mg_set_request_handler(ctx, "/api/v1/health", handler_health, NULL);
 	mg_set_request_handler(ctx, "/api/v1/control", handler_control, NULL);
 	mg_set_request_handler(ctx, "/api/v1/control/reset", handler_control_reset, NULL);
+	mg_set_request_handler(ctx, "/api/v1/control/enable", handler_control_enable, NULL);
+	mg_set_request_handler(ctx, "/api/v1/control/disable", handler_control_disable, NULL);
 	mg_set_request_handler(ctx, "/openapi.yaml", handler_openapi_spec, NULL);
 	mg_set_request_handler(ctx, "/docs", handler_docs_ui, NULL);
 	mg_set_request_handler(ctx, "/docs/redoc.standalone.js", handler_docs_redoc_js, NULL);

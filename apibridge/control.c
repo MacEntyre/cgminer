@@ -26,11 +26,12 @@ struct control_option {
 	bool needs_value;
 };
 
-/* GSA1/GSA2 (Compac A2 / Terminus A2) specific options - corev, setfan,
- * zeromaxt - are relayed for any asc_id without checking device type here:
- * compac_api_set() itself no-ops harmlessly on other ASIC types, so
- * duplicating that check would just be re-validation apibridge shouldn't
- * do. See driver-gekko.c:compac_api_set(). */
+/* Device-type-specific options - corev/setfan/zeromaxt (GSA1/GSA2, i.e.
+ * Compac A2 / Terminus A2) and chip/usbprop (BM1397, i.e. CompacF/R909) -
+ * are relayed for any asc_id without checking device type here:
+ * compac_api_set() itself no-ops harmlessly (or returns its own "only for
+ * ..." error) on other ASIC types, so duplicating that check would just be
+ * re-validation apibridge shouldn't do. See driver-gekko.c:compac_api_set(). */
 static const struct control_option control_whitelist[] = {
 	{ "freq",       true  },
 	{ "target",     true  },
@@ -39,6 +40,10 @@ static const struct control_option control_whitelist[] = {
 	{ "lockfreq",   false },
 	{ "unlockfreq", false },
 	{ "zeromaxt",   false },
+	{ "chip",       true  },
+	{ "waitfactor", true  },
+	{ "usbprop",    true  },
+	{ "require",    true  },
 };
 
 #define CONTROL_WHITELIST_LEN (sizeof(control_whitelist) / sizeof(control_whitelist[0]))
@@ -97,7 +102,58 @@ json_t *control_relay_reset(int asc_id)
 	return cgclient_query_param(g_config.cgminer_host, g_config.cgminer_port, "ascset", param, 3);
 }
 
-int control_status_to_http(json_t *resp, const char **msg_out)
+bool control_build_parameter_chip(char *out, size_t out_siz, int asc_id, int chip_index, double value)
+{
+	int n;
+
+	if (!out || asc_id < 0 || chip_index < 0)
+		return false;
+
+	n = snprintf(out, out_siz, "%d,chip,%d:%g", asc_id, chip_index, value);
+
+	return n > 0 && (size_t)n < out_siz;
+}
+
+json_t *control_relay_ascset_chip(int asc_id, int chip_index, double value)
+{
+	char param[CONTROL_PARAM_MAX];
+
+	if (!control_build_parameter_chip(param, sizeof(param), asc_id, chip_index, value))
+		return NULL;
+
+	return cgclient_query_param(g_config.cgminer_host, g_config.cgminer_port, "ascset", param, 3);
+}
+
+/* ascenable/ascdisable take a bare "<asc_id>" wire parameter, not the
+ * "<asc_id>,<option>[,<value>]" shape ascset uses (api.c: ascenable(),
+ * ascdisable() both just atoi() the whole parameter) - so this builds its
+ * own tiny parameter rather than going through control_build_parameter(). */
+static json_t *control_relay_asc_command(const char *command, int asc_id)
+{
+	char param[16];
+	int n;
+
+	if (asc_id < 0)
+		return NULL;
+
+	n = snprintf(param, sizeof(param), "%d", asc_id);
+	if (n <= 0 || (size_t)n >= sizeof(param))
+		return NULL;
+
+	return cgclient_query_param(g_config.cgminer_host, g_config.cgminer_port, command, param, 3);
+}
+
+json_t *control_relay_ascenable(int asc_id)
+{
+	return control_relay_asc_command("ascenable", asc_id);
+}
+
+json_t *control_relay_ascdisable(int asc_id)
+{
+	return control_relay_asc_command("ascdisable", asc_id);
+}
+
+static int status_to_http(json_t *resp, const char **msg_out, bool info_is_success)
 {
 	json_t *status_arr, *first, *status_str, *msg;
 	const char *sev;
@@ -123,7 +179,7 @@ int control_status_to_http(json_t *resp, const char **msg_out)
 	if (!sev)
 		return 502;
 
-	if (!strcmp(sev, "S"))
+	if (!strcmp(sev, "S") || (info_is_success && !strcmp(sev, "I")))
 		return 200;
 
 	/* api.c's MSG_ACCDENY text - the ACL rejection specifically, so a
@@ -133,6 +189,16 @@ int control_status_to_http(json_t *resp, const char **msg_out)
 		return 403;
 
 	return 422;
+}
+
+int control_status_to_http(json_t *resp, const char **msg_out)
+{
+	return status_to_http(resp, msg_out, false);
+}
+
+int control_enable_status_to_http(json_t *resp, const char **msg_out)
+{
+	return status_to_http(resp, msg_out, true);
 }
 
 bool control_check_privileged(void)

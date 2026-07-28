@@ -8,8 +8,11 @@
  */
 
 /* Unit tests for the pure logic in control.c: the option whitelist, wire
- * parameter construction, and the STATUS-to-HTTP mapping. The actual relay
- * calls (control_relay_ascset/control_relay_reset/control_check_privileged)
+ * parameter construction (including the "chip" compound-value case), and
+ * the STATUS-to-HTTP mapping (both the generic one and the enable/disable-
+ * specific one that also treats "I" as success). The actual relay calls
+ * (control_relay_ascset/control_relay_ascset_chip/control_relay_reset/
+ * control_relay_ascenable/control_relay_ascdisable/control_check_privileged)
  * go over the network via cgclient and are exercised end to end instead by
  * apibridge/tools/component-test.py - here cgclient_query[_param]() are
  * stubbed out (unused) so this binary doesn't need to link the real
@@ -70,14 +73,22 @@ static void test_option_whitelist(void)
 	CHECK("zeromaxt allowed", control_option_allowed("zeromaxt", &needs_value), true);
 	CHECK("zeromaxt does not need value", needs_value, false);
 
+	CHECK("chip allowed", control_option_allowed("chip", &needs_value), true);
+	CHECK("chip needs value", needs_value, true);
+
+	CHECK("waitfactor allowed", control_option_allowed("waitfactor", &needs_value), true);
+	CHECK("waitfactor needs value", needs_value, true);
+
+	CHECK("usbprop allowed", control_option_allowed("usbprop", &needs_value), true);
+	CHECK("usbprop needs value", needs_value, true);
+
+	CHECK("require allowed", control_option_allowed("require", &needs_value), true);
+	CHECK("require needs value", needs_value, true);
+
 	/* reset is deliberately not on the generic whitelist - it has its own
 	 * dedicated endpoint (/api/v1/control/reset) so a typo'd "option"
 	 * string can't reach it. */
 	CHECK("reset not allowed via generic whitelist", control_option_allowed("reset", &needs_value), false);
-	CHECK("chip:freq not allowed (v1 scope)", control_option_allowed("chip:freq", &needs_value), false);
-	CHECK("waitfactor not allowed (v1 scope)", control_option_allowed("waitfactor", &needs_value), false);
-	CHECK("usbprop not allowed (v1 scope)", control_option_allowed("usbprop", &needs_value), false);
-	CHECK("require not allowed (v1 scope)", control_option_allowed("require", &needs_value), false);
 	CHECK("unknown option not allowed", control_option_allowed("bogus", &needs_value), false);
 	CHECK("empty option not allowed", control_option_allowed("", &needs_value), false);
 	CHECK("NULL option not allowed", control_option_allowed(NULL, &needs_value), false);
@@ -101,6 +112,23 @@ static void test_build_parameter(void)
 	CHECK("empty option rejected", control_build_parameter(buf, sizeof(buf), 0, "", true, 650), false);
 	CHECK("NULL option rejected", control_build_parameter(buf, sizeof(buf), 0, NULL, true, 650), false);
 	CHECK("undersized buffer rejected", control_build_parameter(tiny, sizeof(tiny), 0, "freq", true, 650), false);
+}
+
+static void test_build_parameter_chip(void)
+{
+	char buf[CONTROL_PARAM_MAX];
+	char tiny[4];
+
+	CHECK("chip parameter builds", control_build_parameter_chip(buf, sizeof(buf), 0, 3, 650), true);
+	CHECK_STR("chip parameter combines index and freq", buf, "0,chip,3:650");
+
+	CHECK("chip parameter with fractional freq builds",
+	      control_build_parameter_chip(buf, sizeof(buf), 1, 0, 650.5), true);
+	CHECK_STR("chip parameter fractional freq", buf, "1,chip,0:650.5");
+
+	CHECK("negative asc_id rejected (chip)", control_build_parameter_chip(buf, sizeof(buf), -1, 0, 650), false);
+	CHECK("negative chip_index rejected", control_build_parameter_chip(buf, sizeof(buf), 0, -1, 650), false);
+	CHECK("undersized buffer rejected (chip)", control_build_parameter_chip(tiny, sizeof(tiny), 0, 3, 650), false);
 }
 
 static json_t *make_status(const char *status, const char *msg)
@@ -149,6 +177,46 @@ static void test_status_to_http(void)
 	CHECK("NULL response maps to 502", control_status_to_http(NULL, NULL), 502);
 }
 
+static void test_enable_status_to_http(void)
+{
+	json_t *resp;
+	const char *msg;
+
+	/* api.c's ascenable()/ascdisable() report success (and "already
+	 * enabled"/"already disabled") as STATUS "I", not "S" - see
+	 * control.h:control_enable_status_to_http(). */
+	resp = make_status("I", "ASC 0 sent enable message");
+	CHECK("info status maps to 200 for enable/disable", control_enable_status_to_http(resp, &msg), 200);
+	CHECK_STR("info message passed through", msg, "ASC 0 sent enable message");
+	json_decref(resp);
+
+	resp = make_status("I", "ASC 0 already enabled");
+	CHECK("already-enabled info status maps to 200", control_enable_status_to_http(resp, &msg), 200);
+	json_decref(resp);
+
+	resp = make_status("S", "ASC 0 set OK");
+	CHECK("success status still maps to 200", control_enable_status_to_http(resp, &msg), 200);
+	json_decref(resp);
+
+	resp = make_status("E", "Access denied to 'ascenable' command");
+	CHECK("access denied still maps to 403", control_enable_status_to_http(resp, &msg), 403);
+	json_decref(resp);
+
+	resp = make_status("E", "Invalid ASC id 5");
+	CHECK("other error still maps to 422", control_enable_status_to_http(resp, &msg), 422);
+	json_decref(resp);
+
+	CHECK("NULL response maps to 502 (enable/disable)", control_enable_status_to_http(NULL, NULL), 502);
+
+	/* "I" is enable/disable-specific - the generic mapper must not start
+	 * treating it as success too, or ascset's own "already at that
+	 * frequency"-style info replies (if any) would silently start
+	 * reporting 200 for callers that didn't ask for that. */
+	resp = make_status("I", "ASC 0 sent enable message");
+	CHECK("info status still 422 via the generic mapper", control_status_to_http(resp, &msg), 422);
+	json_decref(resp);
+}
+
 static void test_availability_cache(void)
 {
 	CHECK("availability defaults to false", control_is_available(), false);
@@ -164,7 +232,9 @@ int main(void)
 {
 	test_option_whitelist();
 	test_build_parameter();
+	test_build_parameter_chip();
 	test_status_to_http();
+	test_enable_status_to_http();
 	test_availability_cache();
 
 	TEST_EXIT();
