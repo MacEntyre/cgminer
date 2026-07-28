@@ -24,6 +24,9 @@ EXTRA_DIST	= example.conf linux-usb-cgminer \
 		  apibridge/tools/hw-smoke-test.sh apibridge/tools/ws_probe.py \
 		  apibridge/tools/apibridge-cli.py apibridge/tools/_ws.py \
 		  apibridge/tools/component-test.py \
+		  docs/openapi.yaml apibridge/docs_ui.html \
+		  compat/redoc/redoc.standalone.js compat/redoc/LICENSE compat/redoc/VERSION \
+		  tools/embed_file.sh .spectral.yaml \
 		  01-cgminer.rules
 
 SUBDIRS		= lib compat ccan
@@ -249,6 +252,27 @@ bin_PROGRAMS += apibridged
 
 CIVETWEB_CPPFLAGS = -I$(top_srcdir)/compat/civetweb-1.16 -DNO_SSL -DUSE_WEBSOCKET -DNO_CGI -DUSE_IPV6
 
+# apibridge/generated/docs_embed.h embeds docs/openapi.yaml, the Redoc HTML
+# shell (apibridge/docs_ui.html) and the vendored Redoc bundle
+# (compat/redoc/redoc.standalone.js) as C byte arrays, so GET /docs,
+# /openapi.yaml and /docs/redoc.standalone.js (apibridge/httpapi.c) can be
+# served through apibridge's own explicit handlers instead of civetweb's
+# static file serving - see main.c's document_root comment for why that's
+# deliberately unset. Generated into the build tree, not committed.
+# tools/embed_file.sh is plain POSIX sh/od/awk - no extra build dependency.
+DOCS_EMBED_H = apibridge/generated/docs_embed.h
+
+$(DOCS_EMBED_H): $(top_srcdir)/docs/openapi.yaml $(top_srcdir)/apibridge/docs_ui.html \
+		 $(top_srcdir)/compat/redoc/redoc.standalone.js $(top_srcdir)/tools/embed_file.sh
+	$(MKDIR_P) apibridge/generated
+	$(SHELL) $(top_srcdir)/tools/embed_file.sh $@ \
+	  openapi_spec_yaml=$(top_srcdir)/docs/openapi.yaml \
+	  docs_ui_html=$(top_srcdir)/apibridge/docs_ui.html \
+	  redoc_standalone_js=$(top_srcdir)/compat/redoc/redoc.standalone.js
+
+BUILT_SOURCES = $(DOCS_EMBED_H)
+CLEANFILES = $(DOCS_EMBED_H)
+
 apibridged_SOURCES = apibridge/main.c \
 		     apibridge/cgclient.c apibridge/cgclient.h \
 		     apibridge/statscache.c apibridge/statscache.h \
@@ -259,7 +283,7 @@ apibridged_SOURCES = apibridge/main.c \
 		     apibridge/settings.c apibridge/settings.h \
 		     apibridge/apibridge.h \
 		     compat/civetweb-1.16/civetweb.c compat/civetweb-1.16/civetweb.h
-apibridged_CPPFLAGS = $(PTHREAD_FLAGS) $(JANSSON_CPPFLAGS) $(CIVETWEB_CPPFLAGS)
+apibridged_CPPFLAGS = $(PTHREAD_FLAGS) $(JANSSON_CPPFLAGS) $(CIVETWEB_CPPFLAGS) -I$(top_builddir)/apibridge
 apibridged_LDFLAGS  = $(PTHREAD_FLAGS)
 apibridged_LDADD    = @JANSSON_LIBS@ @PTHREAD_LIBS@
 

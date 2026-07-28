@@ -1,0 +1,2 @@
+Vendored from npm package "redoc" version 2.5.3 (bundles/redoc.standalone.js), MIT licensed.
+See LICENSE in this directory. Used by apibridge/httpapi.c to serve GET /docs.

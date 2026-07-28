@@ -22,6 +22,7 @@ cgminer.sh
 apibridged
 apibridged.exe
 apibridge.token
+apibridge/generated/
 minerd
 minerd.exe
 *.o

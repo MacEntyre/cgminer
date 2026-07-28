@@ -1,0 +1,485 @@
+openapi: 3.1.0
+info:
+  title: apibridge
+  version: "1"
+  summary: HTTP/WebSocket JSON API exposing cgminer's RPC API for a mobile dashboard.
+  description: |
+    apibridge is a companion process fork/exec'd and supervised by cgminer
+    (see cgminer-apibridge.c). It polls cgminer's own local RPC API
+    (api.c, one JSON request per TCP connection - see API-README) and
+    re-exposes it as this HTTP/WebSocket JSON API. A bug or crash in
+    apibridge can never take mining down with it: apibridge only ever
+    talks to cgminer over its existing local RPC socket, never the other
+    way around.
+
+    See `APIBRIDGE-README` in the repository root for the full narrative
+    (build/run instructions, the two-token auth model, the audit-log
+    format, and the security posture) - this document is the machine-
+    readable reference for the same API, not a replacement for it.
+  license:
+    name: GPL-3.0-or-later
+    identifier: GPL-3.0-or-later
+  contact:
+    name: MacEntyre/cgminer
+    url: https://github.com/MacEntyre/cgminer
+
+servers:
+  - url: "http://{host}:{port}"
+    description: apibridge's own HTTP/WebSocket listener (default port 4029, LAN-reachable by default - see the Security section below).
+    variables:
+      host:
+        default: 127.0.0.1
+      port:
+        default: "4029"
+
+tags:
+  - name: monitoring
+    description: Phase 1 - read-only monitoring (always available once apibridge is running).
+  - name: control
+    description: Phase 2 - control endpoints, opt-in via --api-bridge-control (501 when disabled).
+  - name: docs
+    description: This spec and its rendered UI, served by apibridge itself.
+
+security:
+  - readToken: []
+
+paths:
+  /api/v1/health:
+    get:
+      operationId: getHealth
+      tags: [monitoring]
+      summary: Bridge + cgminer reachability status.
+      description: |
+        The only monitoring route that does not require a bearer token,
+        so a dashboard can show connection status before it has one.
+      security: []
+      responses:
+        "200":
+          description: Always 200 - reachability is reported in the body, not the status code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /api/v1/summary:
+    get:
+      operationId: getSummary
+      tags: [monitoring]
+      summary: Same data as the RPC "summary" command.
+      description: Cached, refreshed once per apibridge poll cycle (default every 2s) - not a live round-trip to cgminer on every call.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CachedStat"
+              examples:
+                default:
+                  value:
+                    summary: { STATUS: [{ STATUS: S, Msg: Summary }], SUMMARY: [{ Elapsed: 123, "MHS av": 1500.0, Accepted: 10, Rejected: 1 }], id: 1 }
+                    stale: false
+                    age_s: 0.4
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/devs:
+    get:
+      operationId: getDevs
+      tags: [monitoring]
+      summary: Same data as the RPC "devs" command.
+      description: Cached, refreshed once per apibridge poll cycle (default every 2s) - not a live round-trip to cgminer on every call.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CachedStat"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/pools:
+    get:
+      operationId: getPools
+      tags: [monitoring]
+      summary: Same data as the RPC "pools" command.
+      description: Cached, refreshed once per apibridge poll cycle (default every 2s) - not a live round-trip to cgminer on every call.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CachedStat"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/stats:
+    get:
+      operationId: getStats
+      tags: [monitoring]
+      summary: Same data as the RPC "stats" command - per-device detail.
+      description: |
+        Includes GekkoScience-specific fields such as `Fan` (GSA1/GSA2 fan
+        RPM, from the device's single-byte tach reading) and `FanCeiling`
+        (true once `Fan` hits 7650rpm, the byte encoding's representable
+        ceiling - the true RPM may be higher and the reading wrapped, so
+        treat `Fan` as "at or above 7650" rather than exact once
+        `FanCeiling` is true). Not included in the `/stream` envelope
+        since it is much larger per device than summary/devs/pools
+        combined - poll this endpoint on demand instead.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CachedStat"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/control:
+    post:
+      operationId: postControl
+      tags: [control]
+      summary: Relay a whitelisted ascset option to cgminer.
+      description: |
+        Relays a whitelisted subset of cgminer's own `ascset` RPC command
+        - apibridge does not re-validate frequency/voltage ranges etc.
+        itself; every value driver-gekko.c already clamps is still
+        clamped there. apibridge only decides which option *names* it is
+        willing to forward at all (see the `option` enum below).
+
+        Requires the write-scoped bearer token (separate from the
+        read-only token used by the monitoring routes above), and
+        requires cgminer to have been started with `--api-allow`
+        granting apibridge's loopback connection write access - see
+        `control_available` on `GET /api/v1/health`.
+      security:
+        - writeToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ControlRequest"
+            examples:
+              setFrequency:
+                value: { asc_id: 0, option: freq, value: 650 }
+              lockTuning:
+                value: { asc_id: 0, option: lockfreq }
+      responses:
+        "200":
+          description: cgminer accepted the request (ascset STATUS "S").
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlResult"
+        "400":
+          description: Missing/invalid `asc_id`, non-whitelisted `option`, or missing/invalid `value` for an option that requires one.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: cgminer's own RPC ACL denied the request (missing `--api-allow W:` rule for apibridge's address).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlResult"
+        "422":
+          description: cgminer/driver-gekko.c rejected the value (e.g. out of range). The message is the driver's own, not re-derived by apibridge.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlResult"
+        "501":
+          description: Control endpoints not enabled (`--api-bridge-control` not passed to cgminer).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: cgminer was unreachable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/control/reset:
+    post:
+      operationId: postControlReset
+      tags: [control]
+      summary: Reinit a device (ascset "reset").
+      description: |
+        Kept as its own endpoint rather than reachable through `POST
+        /api/v1/control`'s generic `option` field, since a device reinit
+        is more disruptive than the other whitelisted options.
+      security:
+        - writeToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [asc_id]
+              properties:
+                asc_id:
+                  type: integer
+                  minimum: 0
+                  description: ASC index, matching the "ASC" field in the `devs` response.
+      responses:
+        "200":
+          description: cgminer accepted the reset.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlResult"
+        "400":
+          description: Missing/invalid `asc_id`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: cgminer's own RPC ACL denied the request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlResult"
+        "422":
+          description: cgminer rejected the reset.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlResult"
+        "501":
+          description: Control endpoints not enabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: cgminer was unreachable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/stream:
+    get:
+      operationId: streamStats
+      tags: [monitoring]
+      summary: WebSocket upgrade - pushes a combined stats envelope.
+      description: |
+        Not a plain HTTP route: this path expects a WebSocket upgrade
+        handshake (`Connection: Upgrade`, `Upgrade: websocket`, ...).
+        OpenAPI has no native WebSocket support, so this entry documents
+        the handshake and the one message type pushed over the
+        connection instead of a request/response pair; there is
+        deliberately no separate AsyncAPI document for this single
+        channel/message-type API.
+
+        Auth: same read-only bearer token as the other monitoring
+        routes, presented either as `Authorization: Bearer <token>` or,
+        since some mobile WebSocket clients cannot set custom headers on
+        the upgrade handshake, as a `?token=<token>` query parameter.
+        Connections that fail auth are rejected before the upgrade
+        completes.
+
+        Behavior: on successful connect, the current cached snapshot is
+        pushed immediately (so the client doesn't wait a full poll cycle
+        for its first update), then again once per poll cycle (default
+        every 2s, `--api-bridge` poll interval). Every push uses the
+        `StatsEnvelope` schema below. The connection is read-only in
+        Phase 1: any client-to-server payload is ignored (civetweb
+        handles ping/pong internally).
+      security:
+        - readToken: []
+      responses:
+        "101":
+          description: Switching Protocols - WebSocket upgrade accepted. Every subsequent frame is a `StatsEnvelope`, text-framed, JSON-encoded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsEnvelope"
+        "401":
+          description: Missing or invalid token - connection rejected before upgrade.
+
+  /docs:
+    get:
+      operationId: getDocsUi
+      tags: [docs]
+      summary: Rendered HTML documentation for this spec (Redoc).
+      description: Static HTML shell embedded into the apibridged binary at build time; renders /openapi.yaml client-side. No auth required, same tier as /api/v1/health.
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            text/html: {}
+
+  /docs/redoc.standalone.js:
+    get:
+      operationId: getDocsRedocBundle
+      tags: [docs]
+      summary: Vendored Redoc standalone bundle used by GET /docs.
+      description: Static asset, not part of the API surface proper - listed here only so this spec's paths match apibridge's actually registered routes (see apibridge/tools/component-test.py's drift check).
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/javascript: {}
+
+  /openapi.yaml:
+    get:
+      operationId: getOpenapiSpec
+      tags: [docs]
+      summary: This document, served by apibridge itself.
+      description: Embedded into the apibridged binary at build time from the repository's docs/openapi.yaml. No auth required, same tier as /api/v1/health.
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/yaml: {}
+
+components:
+  securitySchemes:
+    readToken:
+      type: http
+      scheme: bearer
+      description: |
+        Read-only token, written (mode 0600) to `--api-bridge-token-file`
+        on every cgminer start and rotated on every restart. Also
+        accepted as a `?token=` query parameter (see `/api/v1/stream`).
+    writeToken:
+      type: http
+      scheme: bearer
+      description: |
+        Write-scoped token, separate from `readToken`, only generated
+        when cgminer is started with `--api-bridge-control`. Written to
+        `--api-bridge-write-token-file`. Does not work on the monitoring
+        routes, and `readToken` does not work here - checked
+        independently.
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+      example: { error: unauthorized }
+
+    Health:
+      type: object
+      required: [bridge, cgminer_reachable, last_updated_age_s, control_enabled, control_available]
+      properties:
+        bridge:
+          type: string
+          const: ok
+          description: apibridge's own process is up and serving requests.
+        cgminer_reachable:
+          type: boolean
+          description: cgminer answered the last poll and the cached snapshot isn't stale.
+        last_updated_age_s:
+          type: [number, "null"]
+          description: Age in seconds of the cached "summary" snapshot, or null if none has ever been fetched.
+        control_enabled:
+          type: boolean
+          description: cgminer was started with --api-bridge-control.
+        control_available:
+          type: boolean
+          description: control_enabled AND cgminer's own RPC ACL grants apibridge write access (checked once at apibridge startup via the "privileged" RPC command).
+
+    CachedStat:
+      type: object
+      description: |
+        Wraps a passthrough of one of cgminer's own RPC responses
+        (summary/devs/pools/stats - see API-README for their internal
+        shape, which apibridge does not redefine here) with cache
+        freshness metadata. If cgminer becomes unreachable, the
+        last-known-good payload keeps being served with `stale: true`
+        rather than an error.
+      required: [stale, age_s]
+      properties:
+        stale:
+          type: boolean
+        age_s:
+          type: [number, "null"]
+          description: Age in seconds of the cached payload, or null if none has ever been fetched (payload itself is also null in that case).
+      additionalProperties:
+        description: The single key present is "summary", "devs", "pools" or "stats" depending on the route - its value is cgminer's own RPC response object verbatim, or null.
+        type: [object, "null"]
+
+    StatsEnvelope:
+      type: object
+      description: The single message type pushed over `GET /api/v1/stream`.
+      required: [type, stale, ts]
+      properties:
+        type:
+          type: string
+          const: stats
+        summary:
+          description: cgminer's "summary" RPC response, or absent if never successfully fetched.
+          type: object
+        devs:
+          description: cgminer's "devs" RPC response, or absent if never successfully fetched.
+          type: object
+        pools:
+          description: cgminer's "pools" RPC response, or absent if never successfully fetched.
+          type: object
+        stale:
+          type: boolean
+          description: True if any of summary/devs/pools is currently stale.
+        ts:
+          type: integer
+          description: Unix timestamp (seconds) of this push.
+
+    ControlRequest:
+      type: object
+      required: [asc_id, option]
+      properties:
+        asc_id:
+          type: integer
+          minimum: 0
+          description: ASC index, matching the "ASC" field in the `devs` response.
+        option:
+          type: string
+          enum: [freq, target, corev, setfan, lockfreq, unlockfreq, zeromaxt]
+          description: |
+            freq/target/corev/setfan require `value`; lockfreq/unlockfreq/
+            zeromaxt do not accept one. corev/setfan/zeromaxt are
+            GSA1/GSA2 (Compac A2 / Terminus A2) specific - harmless
+            no-ops on other ASIC types, not rejected for them.
+        value:
+          type: number
+          description: |
+            Required for freq (0-800/1200), target (0-800/1200), corev
+            (0-500), setfan (0-100 %). Omitted for lockfreq/unlockfreq/
+            zeromaxt. Range validation happens in driver-gekko.c, not
+            apibridge - out-of-range values come back as 422 with the
+            driver's own message.
+
+    ControlResult:
+      type: object
+      properties:
+        message:
+          type: [string, "null"]
+          description: cgminer's own ascset response message, relayed close to verbatim.

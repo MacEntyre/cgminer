@@ -109,6 +109,19 @@ check "GET /stats" "$code" "200"
 code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4029/api/v1/summary)
 check "GET /summary without token is rejected" "$code" "401"
 
+note "docs endpoints (no auth, embedded at build time - see tools/embed_file.sh)"
+code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4029/openapi.yaml)
+check "GET /openapi.yaml (no auth)" "$code" "200"
+
+first_line=$(curl -s http://127.0.0.1:4029/openapi.yaml | head -1)
+check "GET /openapi.yaml content" "$first_line" "openapi: 3.1.0"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4029/docs)
+check "GET /docs (no auth)" "$code" "200"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4029/docs/redoc.standalone.js)
+check "GET /docs/redoc.standalone.js (no auth)" "$code" "200"
+
 note "devs payload (spot-check real device fields)"
 curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/devs
 

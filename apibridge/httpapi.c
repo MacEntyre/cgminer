@@ -21,6 +21,13 @@
 #include "httpapi.h"
 #include "statscache.h"
 
+/* openapi_spec_yaml, docs_ui_html, redoc_standalone_js (+ *_len) - the
+ * spec, its Redoc HTML shell, and the vendored Redoc bundle, compiled in
+ * at build time by tools/embed_file.sh (see main.c's document_root
+ * comment for why these are served through dedicated handlers below
+ * instead of civetweb's static file serving). */
+#include "generated/docs_embed.h"
+
 /* Control POST bodies are tiny ({"asc_id":0,"option":"freq","value":650}) -
  * bound the read rather than growing a buffer, and reject anything larger
  * up front via Content-Length instead of silently truncating. */
@@ -116,6 +123,42 @@ static int handle_control_request(struct mg_connection *conn,
 	status = fn(conn, req, remote);
 	json_decref(req);
 	return status;
+}
+
+/* Serves one of the embedded docs assets verbatim (byte-exact, no
+ * transcoding) with the given content type. No auth: these are static
+ * documentation with no operational data, same tier as /api/v1/health -
+ * gating them would defeat the point of a spec that's browsable by
+ * third parties. */
+static int send_embedded(struct mg_connection *conn, const char *content_type,
+			  const unsigned char *data, size_t len)
+{
+	mg_printf(conn,
+		  "HTTP/1.1 200 OK\r\n"
+		  "Content-Type: %s\r\n"
+		  "Content-Length: %lu\r\n"
+		  "Connection: close\r\n\r\n",
+		  content_type, (unsigned long)len);
+	mg_write(conn, data, len);
+	return 200;
+}
+
+static int handler_openapi_spec(struct mg_connection *conn, void *cbdata)
+{
+	(void)cbdata;
+	return send_embedded(conn, "application/yaml", openapi_spec_yaml, openapi_spec_yaml_len);
+}
+
+static int handler_docs_ui(struct mg_connection *conn, void *cbdata)
+{
+	(void)cbdata;
+	return send_embedded(conn, "text/html", docs_ui_html, docs_ui_html_len);
+}
+
+static int handler_docs_redoc_js(struct mg_connection *conn, void *cbdata)
+{
+	(void)cbdata;
+	return send_embedded(conn, "application/javascript", redoc_standalone_js, redoc_standalone_js_len);
 }
 
 static bool get_asc_id(json_t *req, int *asc_id_out)
@@ -303,4 +346,7 @@ void httpapi_register(struct mg_context *ctx)
 	mg_set_request_handler(ctx, "/api/v1/health", handler_health, NULL);
 	mg_set_request_handler(ctx, "/api/v1/control", handler_control, NULL);
 	mg_set_request_handler(ctx, "/api/v1/control/reset", handler_control_reset, NULL);
+	mg_set_request_handler(ctx, "/openapi.yaml", handler_openapi_spec, NULL);
+	mg_set_request_handler(ctx, "/docs", handler_docs_ui, NULL);
+	mg_set_request_handler(ctx, "/docs/redoc.standalone.js", handler_docs_redoc_js, NULL);
 }

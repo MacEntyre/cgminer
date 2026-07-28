@@ -16,11 +16,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: Install lint tools
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cppcheck shellcheck
           pip install --quiet ruff
+
+      - name: spectral lint - openapi spec
+        run: npx --yes @stoplight/spectral-cli lint docs/openapi.yaml
 
       - name: cppcheck - apibridge
         run: |
@@ -34,7 +41,7 @@ jobs:
         run: ruff check apibridge/tools/*.py
 
       - name: shellcheck - apibridge tools
-        run: shellcheck apibridge/tools/hw-smoke-test.sh
+        run: shellcheck apibridge/tools/hw-smoke-test.sh tools/embed_file.sh
 
   sast:
     runs-on: ubuntu-22.04

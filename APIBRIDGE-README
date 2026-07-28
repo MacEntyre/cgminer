@@ -71,6 +71,17 @@ an environment variable, not argv, to avoid exposure through `ps`. It
 rotates on every cgminer restart - there is no persistent pairing yet (see
 ROADMAP below).
 
+MACHINE-READABLE REFERENCE
+
+Once apibridge is running, GET /docs serves a browsable OpenAPI 3.1
+reference (Redoc, vendored - no external network access needed) covering
+every route below, and GET /openapi.yaml serves the spec itself
+(docs/openapi.yaml in this repository). Both are unauthenticated, same
+tier as /api/v1/health - static documentation, no operational data. This
+prose is still the place for the narrative this repo's README-style docs
+are good at (the auth model, the audit-log format, the security posture);
+the spec is the machine-readable contract for the same API.
+
 PHASE 1: READ-ONLY MONITORING
 
   GET /api/v1/summary   Same data as the RPC "summary" command

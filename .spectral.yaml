@@ -1,0 +1,7 @@
+extends: spectral:oas
+
+rules:
+  # /api/v1/stream is a WebSocket upgrade documented for reference (OpenAPI
+  # has no native modeling for the 101 handshake as a 2xx/3xx "success"
+  # response) - see that path's description in docs/openapi.yaml.
+  operation-success-response: off

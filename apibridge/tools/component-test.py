@@ -8,12 +8,17 @@ The fake server speaks just enough of cgminer's api.c protocol (one
 JSON request per connection, NUL-terminated JSON reply, then close) to
 serve canned "summary"/"devs"/"pools"/"stats" responses.
 
+Also checks that docs/openapi.yaml's declared paths match the routes
+actually registered in apibridge/httpapi.c and wsapi.c, so the spec can't
+silently drift from the code (see check_spec_matches_registered_routes()).
+
 Usage:
     apibridge/tools/component-test.py [--apibridged PATH]
 """
 import argparse
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -159,6 +164,45 @@ class FakeCgminer:
         self.stop_event.set()
         self.thread.join(timeout=2)
         self.sock.close()
+
+
+def spec_paths(openapi_yaml_path):
+    """Top-level `paths:` keys from docs/openapi.yaml, e.g. "/api/v1/health".
+    Deliberately a regex over the hand-authored YAML rather than a real
+    YAML parse - this script is stdlib-only by design (see module
+    docstring), and the file's `paths:` entries are always simple strings
+    at a fixed 2-space indent, one level below every other top-level
+    section (components' nested keys sit at 4+ spaces), so the regex is
+    unambiguous for this specific file."""
+    with open(openapi_yaml_path, encoding="utf-8") as f:
+        text = f.read()
+    # Each line of the paths: block is either blank or indented >=2 spaces;
+    # stop at the first line that is neither (the next top-level section).
+    m = re.search(r"(?m)^paths:\n((?:^(?:  .*)?\n)*)", text)
+    if not m:
+        return set()
+    return set(re.findall(r"(?m)^  (/\S+):", m.group(1)))
+
+
+def registered_paths():
+    """Routes actually wired up via mg_set_request_handler/
+    mg_set_websocket_handler in apibridge/httpapi.c and wsapi.c - read
+    straight from source (not a second hand-maintained list) so this is a
+    real drift check between the spec and the code, not two lists that
+    can drift together."""
+    paths = set()
+    for relpath in ("apibridge/httpapi.c", "apibridge/wsapi.c"):
+        with open(os.path.join(REPO_ROOT, relpath), encoding="utf-8") as f:
+            text = f.read()
+        paths.update(re.findall(r'mg_set_(?:request|websocket)_handler\(\s*ctx,\s*"([^"]+)"', text))
+    return paths
+
+
+def check_spec_matches_registered_routes():
+    spec = spec_paths(os.path.join(REPO_ROOT, "docs", "openapi.yaml"))
+    registered = registered_paths()
+    check("openapi.yaml paths match registered civetweb routes",
+          sorted(spec), sorted(registered))
 
 
 def http_get(url, token=None, timeout=5):
@@ -387,6 +431,8 @@ def main():
         print(f"error: {args.apibridged} not found or not executable - "
               f"build with --enable-apibridge first", file=sys.stderr)
         return 1
+
+    check_spec_matches_registered_routes()
 
     host = "127.0.0.1"
     token = "component-test-token"
