@@ -266,15 +266,22 @@ e.g. for a Compac A1:
 
 This is a manual, opt-in script (not run by CI) that starts cgminer
 against the given pool with the given device, waits for apibridge to come
-up, checks /health, /summary, /devs, /pools (with and without the bearer
-token), reads a few live frames off /stream via a small stdlib-only
-WebSocket client (apibridge/tools/ws_probe.py), and verifies cgminer can
-shut down apibridged cleanly within its SIGTERM grace period. Set
+up, checks /health, /summary, /devs, /pools, /stats, /version, /config,
+/coin, /notify (with and without the bearer token), reads a few live
+frames off /stream via a small stdlib-only WebSocket client
+(apibridge/tools/ws_probe.py), and verifies cgminer can shut down
+apibridged cleanly within its SIGTERM grace period. Set
 HW_SMOKE_TEST_CONTROL=1 to also start cgminer with --api-bridge-control
 --api-allow W:127.0.0.1 and exercise POST /api/v1/control end to end
-against the real device via a "zeromaxt" call - chosen because it's a
-harmless no-op on a healthy device, unlike freq/corev, so the script
-doesn't perturb whatever the device is actually doing. Off by default.
+against the real device: a "zeromaxt" call (harmless no-op, unlike
+freq/corev); a "setfan" round trip that confirms the fan RPM in /stats
+actually changes, then restores it; "waitfactor"/"require" round trips
+that read the driver's current value and write it back unchanged;
+"usbprop"/"chip" round trips the same way, BM1397-only, treating the
+driver's HTTP 422 on other ASIC types as SKIP rather than FAIL; and a
+POST /api/v1/control/enable + /disable round trip that verifies
+/api/v1/devs' "Enabled" field actually flips through apibridge, always
+ending by re-enabling the device. Off by default.
 
 CLI CLIENT
 

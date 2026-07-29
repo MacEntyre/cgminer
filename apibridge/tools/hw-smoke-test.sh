@@ -32,6 +32,19 @@
 # the driver rejects it (HTTP 422), which this script treats as SKIP, not
 # FAIL, since it's plugged-in-hardware dependent rather than a bug.
 #
+# Also exercises the options/routes added for issue #7:
+#   - waitfactor/require: read the driver's current value from /stats and
+#     write the same value back (idempotent, applies to every ASIC type).
+#   - usbprop/chip: BM1397 only (CompacF/R909) - same round-trip idea via
+#     USBProp/Chip0FreqReply; HTTP 422 on any other ASIC type is SKIP, not
+#     FAIL, same idiom as setfan above.
+#   - POST /api/v1/control/enable and /disable: disables the device, checks
+#     /api/v1/devs' "Enabled" field flips to "N", then re-enables and
+#     checks it flips back to "Y". This briefly stops the device from
+#     mining - that's the feature being tested - always ends by
+#     re-enabling, same "leave the device as found" principle as setfan's
+#     restore-to-100.
+#
 # See CLAUDE.md's "Device Identity -> ASIC Mapping" table for the detect
 # flag matching your hardware.
 
@@ -105,6 +118,18 @@ check "GET /pools" "$code" "200"
 
 code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/stats)
 check "GET /stats" "$code" "200"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/version)
+check "GET /version" "$code" "200"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/config)
+check "GET /config" "$code" "200"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/coin)
+check "GET /coin" "$code" "200"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/notify)
+check "GET /notify" "$code" "200"
 
 code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4029/api/v1/summary)
 check "GET /summary without token is rejected" "$code" "401"
@@ -206,6 +231,111 @@ print(devs[0].get("Fan", "") if devs else "")')
 		else
 			echo "SKIP POST /control setfan (HTTP $setfan_code - device doesn't support setfan, e.g. not GSA1/2 V2/V3)"
 		fi
+
+		# waitfactor/require apply to every ASIC type (compac_api_set() does
+		# not gate them on asic_type/ident) - read the driver's current
+		# value from /stats and write the same value back, so this is an
+		# idempotent round trip rather than an actual tuning change.
+		note "waitfactor round-trip (reads current value, writes it back unchanged)"
+		waitfactor=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/stats \
+			| python3 -c 'import json,sys
+d = json.load(sys.stdin)
+devs = [e for e in d.get("stats", {}).get("STATS", []) if not str(e.get("ID", "")).startswith("POOL")]
+print(devs[0].get("WaitFactor0", "") if devs else "")')
+		if [ -n "$waitfactor" ]; then
+			code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+				-H "Authorization: Bearer $WRITE_TOKEN" -H "Content-Type: application/json" \
+				-d "{\"asc_id\":0,\"option\":\"waitfactor\",\"value\":$waitfactor}" http://127.0.0.1:4029/api/v1/control)
+			check "POST /control waitfactor (same value $waitfactor)" "$code" "200"
+		else
+			echo "SKIP POST /control waitfactor (could not read current WaitFactor0 from /stats)"
+		fi
+
+		note "require round-trip (reads current value, writes it back unchanged)"
+		require=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/stats \
+			| python3 -c 'import json,sys
+d = json.load(sys.stdin)
+devs = [e for e in d.get("stats", {}).get("STATS", []) if not str(e.get("ID", "")).startswith("POOL")]
+print(devs[0].get("Require", "") if devs else "")')
+		if [ -n "$require" ]; then
+			code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+				-H "Authorization: Bearer $WRITE_TOKEN" -H "Content-Type: application/json" \
+				-d "{\"asc_id\":0,\"option\":\"require\",\"value\":$require}" http://127.0.0.1:4029/api/v1/control)
+			check "POST /control require (same value $require)" "$code" "200"
+		else
+			echo "SKIP POST /control require (could not read current Require from /stats)"
+		fi
+
+		# usbprop/chip are BM1397-only (compac_api_set() rejects them for
+		# any other asic_type before even looking at the value) - always
+		# attempt them and treat the driver's own HTTP 422 rejection as
+		# SKIP rather than FAIL, same idiom as setfan above, instead of
+		# trying to infer the ASIC type from the detect flag ourselves.
+		note "usbprop round-trip (BM1397 only - HTTP 422 on other ASIC types is SKIP, not FAIL)"
+		usbprop=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/stats \
+			| python3 -c 'import json,sys
+d = json.load(sys.stdin)
+devs = [e for e in d.get("stats", {}).get("STATS", []) if not str(e.get("ID", "")).startswith("POOL")]
+print(devs[0].get("USBProp", 400) if devs else 400)')
+		usbprop_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+			-H "Authorization: Bearer $WRITE_TOKEN" -H "Content-Type: application/json" \
+			-d "{\"asc_id\":0,\"option\":\"usbprop\",\"value\":$usbprop}" http://127.0.0.1:4029/api/v1/control)
+		if [ "$usbprop_code" = "200" ]; then
+			echo "OK   POST /control usbprop (same value $usbprop)"
+		elif [ "$usbprop_code" = "422" ]; then
+			echo "SKIP POST /control usbprop (HTTP 422 - device is not BM1397)"
+		else
+			echo "FAIL POST /control usbprop (HTTP $usbprop_code)"
+			fail=1
+		fi
+
+		note "chip round-trip (BM1397 only - HTTP 422 on other ASIC types is SKIP, not FAIL)"
+		chip_freq=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/stats \
+			| python3 -c 'import json,sys
+d = json.load(sys.stdin)
+devs = [e for e in d.get("stats", {}).get("STATS", []) if not str(e.get("ID", "")).startswith("POOL")]
+print(devs[0].get("Chip0FreqReply", 0) if devs else 0)')
+		chip_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+			-H "Authorization: Bearer $WRITE_TOKEN" -H "Content-Type: application/json" \
+			-d "{\"asc_id\":0,\"option\":\"chip\",\"chip_index\":0,\"value\":$chip_freq}" http://127.0.0.1:4029/api/v1/control)
+		if [ "$chip_code" = "200" ]; then
+			echo "OK   POST /control chip (chip_index 0, same value $chip_freq)"
+		elif [ "$chip_code" = "422" ]; then
+			echo "SKIP POST /control chip (HTTP 422 - device is not BM1397)"
+		else
+			echo "FAIL POST /control chip (HTTP $chip_code)"
+			fail=1
+		fi
+
+		# ascenable/ascdisable briefly stops the device from mining (that's
+		# the point of the feature) - verify the round trip through
+		# apibridge's own /devs view, then always re-enable before moving
+		# on, same "leave the device as found" principle as setfan's
+		# restore-to-100 above.
+		note "ascenable/ascdisable round-trip (verifies /devs Enabled actually flips through apibridge)"
+		code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+			-H "Authorization: Bearer $WRITE_TOKEN" -H "Content-Type: application/json" \
+			-d '{"asc_id":0}' http://127.0.0.1:4029/api/v1/control/disable)
+		check "POST /control/disable with write token" "$code" "200"
+
+		enabled_after_disable=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/devs \
+			| python3 -c 'import json,sys
+d = json.load(sys.stdin)
+devs = d.get("devs", {}).get("DEVS", [])
+print(devs[0].get("Enabled", "") if devs else "")')
+		check "GET /devs Enabled after disable" "$enabled_after_disable" "N"
+
+		code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+			-H "Authorization: Bearer $WRITE_TOKEN" -H "Content-Type: application/json" \
+			-d '{"asc_id":0}' http://127.0.0.1:4029/api/v1/control/enable)
+		check "POST /control/enable with write token" "$code" "200"
+
+		enabled_after_enable=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/devs \
+			| python3 -c 'import json,sys
+d = json.load(sys.stdin)
+devs = d.get("devs", {}).get("DEVS", [])
+print(devs[0].get("Enabled", "") if devs else "")')
+		check "GET /devs Enabled after enable" "$enabled_after_enable" "Y"
 	fi
 fi
 
