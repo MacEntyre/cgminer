@@ -41,7 +41,13 @@ jobs:
         run: ruff check apibridge/tools/*.py
 
       - name: shellcheck - apibridge tools
-        run: shellcheck apibridge/tools/hw-smoke-test.sh tools/embed_file.sh
+        run: shellcheck apibridge/tools/hw-smoke-test.sh tools/embed_file.sh tools/policy-lint.sh
+
+      # Content/intent policies shellcheck cannot express (e.g. pin real
+      # Braiins test-rig worker defaults). Drop-in scripts live under
+      # tools/policy-lint.d/ - see tools/policy-lint.sh header.
+      - name: policy-lint
+        run: tools/policy-lint.sh
 
   sast:
     runs-on: ubuntu-22.04

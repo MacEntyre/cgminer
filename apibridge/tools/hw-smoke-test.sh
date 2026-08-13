@@ -11,9 +11,13 @@
 # Usage:
 #   apibridge/tools/hw-smoke-test.sh <gekko-detect-flag> [pool] [user] [pass]
 #
-# Example (Compac A1):
-#   apibridge/tools/hw-smoke-test.sh --gekko-compaca1-detect \
-#       stratum+tcp://stratum.braiins.com:3333 MyWorker.test x
+# Example (Compac A1) - omit pool/user/pass to use the defaults below:
+#   apibridge/tools/hw-smoke-test.sh --gekko-compaca1-detect
+#
+# Defaults match cgminer.sh: Braiins stratum plus the real test-rig worker
+# MacEntyre.APIBridgeTest. A placeholder like test.worker is useless against
+# that pool (no auth, no shares), so the intentional default is a worker that
+# actually exists on the account. Override with positional args if needed.
 #
 # Set HW_SMOKE_TEST_CONTROL=1 to also exercise the Phase 2 control endpoint
 # end to end against the real device (starts cgminer with
@@ -52,7 +56,9 @@ set -u
 
 DETECT_FLAG="${1:?usage: $0 <gekko-detect-flag> [pool] [user] [pass]}"
 POOL="${2:-stratum+tcp://stratum.braiins.com:3333}"
-USER="${3:-test.worker}"
+# Real Braiins worker for this test rig (same as cgminer.sh) - not a
+# placeholder. Shares only land when the pool accepts this user.
+USER="${3:-MacEntyre.APIBridgeTest}"
 PASS="${4:-x}"
 TEST_CONTROL="${HW_SMOKE_TEST_CONTROL:-0}"
 
