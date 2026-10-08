@@ -319,16 +319,33 @@ print(devs[0].get("Chip0FreqReply", 0) if devs else 0)')
 		# on, same "leave the device as found" principle as setfan's
 		# restore-to-100 above.
 		note "ascenable/ascdisable round-trip (verifies /devs Enabled actually flips through apibridge)"
+		# cgminer applies ascdisable/ascenable synchronously (api.c sets
+		# cgpu->deven directly), but /api/v1/devs is served from apibridge's
+		# poll cache (apibridge/statscache.c, default poll_interval_ms=2000)
+		# rather than refreshed per-request - a GET immediately after the
+		# POST can still observe the pre-command cache entry. Poll instead
+		# of a single immediate check, same idiom as the setfan Fan-RPM and
+		# GSA Chips>0 waits above.
+		poll_devs_enabled() {
+			local want="$1" got=""
+			for _ in $(seq 1 10); do
+				got=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/devs \
+					| python3 -c 'import json,sys
+d = json.load(sys.stdin)
+devs = d.get("devs", {}).get("DEVS", [])
+print(devs[0].get("Enabled", "") if devs else "")')
+				[ "$got" = "$want" ] && break
+				sleep 1
+			done
+			printf '%s' "$got"
+		}
+
 		code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
 			-H "Authorization: Bearer $WRITE_TOKEN" -H "Content-Type: application/json" \
 			-d '{"asc_id":0}' http://127.0.0.1:4029/api/v1/control/disable)
 		check "POST /control/disable with write token" "$code" "200"
 
-		enabled_after_disable=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/devs \
-			| python3 -c 'import json,sys
-d = json.load(sys.stdin)
-devs = d.get("devs", {}).get("DEVS", [])
-print(devs[0].get("Enabled", "") if devs else "")')
+		enabled_after_disable=$(poll_devs_enabled "N")
 		check "GET /devs Enabled after disable" "$enabled_after_disable" "N"
 
 		code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
@@ -336,11 +353,7 @@ print(devs[0].get("Enabled", "") if devs else "")')
 			-d '{"asc_id":0}' http://127.0.0.1:4029/api/v1/control/enable)
 		check "POST /control/enable with write token" "$code" "200"
 
-		enabled_after_enable=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4029/api/v1/devs \
-			| python3 -c 'import json,sys
-d = json.load(sys.stdin)
-devs = d.get("devs", {}).get("DEVS", [])
-print(devs[0].get("Enabled", "") if devs else "")')
+		enabled_after_enable=$(poll_devs_enabled "Y")
 		check "GET /devs Enabled after enable" "$enabled_after_enable" "Y"
 	fi
 fi
