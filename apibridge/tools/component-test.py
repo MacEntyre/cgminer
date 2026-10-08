@@ -27,6 +27,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from typing import ClassVar
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(SCRIPT_DIR, "..", ".."))
@@ -138,10 +139,10 @@ class FakeCgminer:
     like a real cgminer started without a W: rule for apibridge's address -
     see APIBRIDGE-README's Phase 2 --api-allow requirement."""
 
-    KNOWN_ASCSET_OPTIONS = {
+    KNOWN_ASCSET_OPTIONS: ClassVar[frozenset[str]] = frozenset({
         "freq", "target", "corev", "setfan", "lockfreq", "unlockfreq", "zeromaxt", "reset",
         "chip", "waitfactor", "usbprop", "require",
-    }
+    })
 
     def __init__(self, host, port):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -182,7 +183,7 @@ class FakeCgminer:
         while not self.stop_event.is_set():
             try:
                 conn, _ = self.sock.accept()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             try:
                 data = conn.recv(4096)
@@ -516,7 +517,6 @@ def run_control_available_false(apibridged_path, host, cgminer_port, listen_port
 
 
 def main():
-    global fail
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apibridged", default=os.path.join(REPO_ROOT, "apibridged"))
     parser.add_argument("--cgminer-port", type=int, default=14028)
